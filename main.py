@@ -4,8 +4,8 @@ import os
 import json
 import asyncio
 from datetime import datetime
+from typing import Optional  # ⬅️ ДОБАВИЛИ ИМПОРТ
 from dotenv import load_dotenv
-import aiohttp
 import logging
 
 # Настройка логирования
