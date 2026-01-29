@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 from typing import Optional
 from dotenv import load_dotenv
+from aiohttp import web
+import asyncio
 
 # Импортируем нашу базу данных
 from database import db
@@ -24,6 +26,7 @@ load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = os.getenv('BOT_PREFIX', '!')
 ADMIN_ROLES = [role.strip() for role in os.getenv('ADMIN_ROLES', 'The Owner,Co-Owner').split(',')]
+PORT = int(os.getenv('PORT', '10000'))  # ⬅️ ПОРТ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
 
 # Проверка наличия токена
 if not TOKEN:
@@ -52,6 +55,49 @@ COLORS = {
     'points': discord.Color.gold(),
     'admin': discord.Color.purple()
 }
+
+# ========== ВЕБ-СЕРВЕР ДЛЯ ПИНГА ==========
+
+async def handle_ping(request):
+    """Обработчик пинга"""
+    logger.info("🏓 Получен пинг от мониторинга")
+    return web.Response(text="Bot is alive! 🟢\nServers: " + str(len(bot.guilds)))
+
+async def handle_health(request):
+    """Обработчик health check"""
+    return web.json_response({
+        "status": "ok",
+        "bot": str(bot.user),
+        "servers": len(bot.guilds),
+        "uptime": str(datetime.now())
+    })
+
+async def start_web_server():
+    """Запуск веб-сервера для пинга"""
+    try:
+        app = web.Application()
+        
+        # Добавляем маршруты
+        app.router.add_get('/', handle_ping)
+        app.router.add_get('/ping', handle_ping)
+        app.router.add_get('/health', handle_health)
+        
+        # Запускаем сервер
+        runner = web.AppRunner(app)
+        await runner.setup()
+        
+        # Используем порт из переменных окружения
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        
+        logger.info(f"🌐 Веб-сервер запущен на порту {PORT}")
+        logger.info(f"📡 Доступные эндпоинты:")
+        logger.info(f"   http://0.0.0.0:{PORT}/")
+        logger.info(f"   http://0.0.0.0:{PORT}/ping")
+        logger.info(f"   http://0.0.0.0:{PORT}/health")
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска веб-сервера: {e}")
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С РОЛЯМИ ==========
 
@@ -147,15 +193,18 @@ async def check_and_assign_roles(member: discord.Member):
 @tasks.loop(minutes=14)
 async def keep_alive():
     """Таск для поддержания активности бота"""
-    logger.info(f"🤖 Бот активен | Серверов: {len(bot.guilds)}")
-    
-    # Обновляем статус
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.watching,
-            name=f"{PREFIX}help | {len(bot.guilds)} серв."
+    try:
+        logger.info(f"🤖 Бот активен | Серверов: {len(bot.guilds)}")
+        
+        # Обновляем статус
+        await bot.change_presence(
+            activity=discord.Activity(
+                type=discord.ActivityType.watching,
+                name=f"{PREFIX}help | {len(bot.guilds)} серв."
+            )
         )
-    )
+    except Exception as e:
+        logger.error(f"Ошибка в keep_alive: {e}")
 
 # ========== СОБЫТИЯ БОТА ==========
 
@@ -164,6 +213,10 @@ async def on_ready():
     """Событие при запуске бота"""
     logger.info(f'✅ Бот {bot.user} запущен!')
     logger.info(f'📊 Серверов: {len(bot.guilds)}')
+    logger.info(f'🌐 Порт веб-сервера: {PORT}')
+    
+    # Запускаем веб-сервер для пинга
+    asyncio.create_task(start_web_server())
     
     # Подключаемся к базе данных
     if await db.connect():
@@ -572,9 +625,10 @@ async def ping_command(ctx):
     )
     embed.add_field(name="Задержка API", value=f"**{latency}мс**", inline=True)
     embed.add_field(name="Серверов", value=f"**{len(bot.guilds)}**", inline=True)
+    embed.add_field(name="Порт", value=f"**{PORT}**", inline=True)
     embed.add_field(name="Статус БД", value="✅ **Подключена**", inline=True)
     embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
-    embed.set_footer(text="Бот работает на Render с PostgreSQL")
+    embed.set_footer(text=f"Эндпоинт для пинга: /ping")
     
     await ctx.send(embed=embed)
 
@@ -623,6 +677,7 @@ async def help_command(ctx):
         value=f"• Админские роли: {', '.join(ADMIN_ROLES)}\n"
               f"• База данных: PostgreSQL\n"
               f"• Хостинг: Render.com\n"
+              f"• Порт: {PORT}\n"
               f"• Режим работы: 24/7",
         inline=False
     )
@@ -672,7 +727,9 @@ if __name__ == "__main__":
     logger.info("🚀 Запуск Discord Points Bot с PostgreSQL")
     logger.info(f"🤖 Префикс команд: {PREFIX}")
     logger.info(f"👑 Админские роли: {ADMIN_ROLES}")
+    logger.info(f"🌐 Порт веб-сервера: {PORT}")
     logger.info("🗄️  Используется база данных PostgreSQL")
+    logger.info("🔄 Бот будет работать 24/7 с веб-сервером для пинга")
     
     try:
         bot.run(TOKEN)
