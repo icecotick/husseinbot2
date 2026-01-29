@@ -1,12 +1,14 @@
 import discord
 from discord.ext import commands, tasks
+from discord import app_commands
 import os
-import json
-import asyncio
-from datetime import datetime
-from typing import Optional  # ⬅️ ДОБАВИЛИ ИМПОРТ
-from dotenv import load_dotenv
 import logging
+from datetime import datetime
+from typing import Optional
+from dotenv import load_dotenv
+
+# Импортируем нашу базу данных
+from database import db
 
 # Настройка логирования
 logging.basicConfig(
@@ -18,154 +20,43 @@ logger = logging.getLogger(__name__)
 # Загрузка переменных окружения
 load_dotenv()
 
-# Настройки
+# Настройки бота
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = os.getenv('BOT_PREFIX', '!')
 ADMIN_ROLES = [role.strip() for role in os.getenv('ADMIN_ROLES', 'The Owner,Co-Owner').split(',')]
 
-# JSON файл для хранения данных
-DATA_FILE = 'points_data.json'
+# Проверка наличия токена
+if not TOKEN:
+    logger.error("❌ Токен бота не найден! Установите DISCORD_TOKEN в .env файле")
+    exit(1)
 
-# Настройки по умолчанию для ролей
-DEFAULT_ROLES = {
-    50: {'name': 'raider newgen', 'color': '#2ecc71'},
-    100: {'name': 'raider scout', 'color': '#3498db'},
-    150: {'name': 'raider striker', 'color': '#e67e22'},
-    350: {'name': 'raider legend', 'color': '#9b59b6'},
-    500: {'name': 'raider commander', 'color': '#f1c40f'}
-}
-
-# Настройки интентов
+# Настройки интентов Discord
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 intents.guilds = True
 
+# Создание бота
 bot = commands.Bot(
     command_prefix=commands.when_mentioned_or(PREFIX),
     intents=intents,
     help_command=None
 )
 
-# Хранение данных
-points_data = {}
-role_settings = {}
+# Цвета для embed сообщений
+COLORS = {
+    'success': discord.Color.green(),
+    'error': discord.Color.red(),
+    'info': discord.Color.blue(),
+    'warning': discord.Color.orange(),
+    'points': discord.Color.gold(),
+    'admin': discord.Color.purple()
+}
 
-# ========== УТИЛИТЫ ДЛЯ РАБОТЫ С ДАННЫМИ ==========
-
-def load_data():
-    """Загрузка данных из JSON файла"""
-    global points_data, role_settings
-    
-    try:
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                points_data = data.get('points', {})
-                role_settings = data.get('roles', DEFAULT_ROLES)
-                logger.info(f"✅ Данные загружены: {len(points_data)} пользователей")
-        else:
-            points_data = {}
-            role_settings = DEFAULT_ROLES.copy()
-            save_data()
-            logger.info("✅ Создан новый файл данных")
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки данных: {e}")
-        points_data = {}
-        role_settings = DEFAULT_ROLES.copy()
-
-def save_data():
-    """Сохранение данных в JSON файл"""
-    try:
-        data = {
-            'points': points_data,
-            'roles': role_settings,
-            'last_updated': datetime.now().isoformat()
-        }
-        
-        with open(DATA_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        
-        logger.info(f"💾 Данные сохранены: {len(points_data)} пользователей")
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения данных: {e}")
-
-def get_user_key(user_id: int, guild_id: int) -> str:
-    """Генерация ключа для пользователя"""
-    return f"{guild_id}_{user_id}"
-
-def get_user_points(user_id: int, guild_id: int) -> int:
-    """Получение поинтов пользователя"""
-    key = get_user_key(user_id, guild_id)
-    return points_data.get(key, 0)
-
-def add_user_points(user_id: int, guild_id: int, amount: int) -> int:
-    """Добавление поинтов пользователю"""
-    key = get_user_key(user_id, guild_id)
-    current = points_data.get(key, 0)
-    points_data[key] = current + amount
-    save_data()
-    return points_data[key]
-
-def remove_user_points(user_id: int, guild_id: int, amount: int) -> int:
-    """Удаление поинтов у пользователя"""
-    key = get_user_key(user_id, guild_id)
-    current = points_data.get(key, 0)
-    new_points = max(0, current - amount)
-    points_data[key] = new_points
-    save_data()
-    return new_points
-
-def set_user_points(user_id: int, guild_id: int, amount: int) -> int:
-    """Установка точного количества поинтов"""
-    key = get_user_key(user_id, guild_id)
-    points_data[key] = max(0, amount)
-    save_data()
-    return points_data[key]
-
-# ========== ПИНГЕР ДЛЯ 24/7 ==========
-
-@tasks.loop(minutes=5)
-async def keep_alive_ping():
-    """Пингер для поддержания активности бота 24/7"""
-    try:
-        # Просто логируем активность
-        logger.info(f"🤖 Бот активен | Серверов: {len(bot.guilds)} | Пользователей в базе: {len(points_data)}")
-        
-        # Обновляем статус
-        await bot.change_presence(
-            activity=discord.Activity(
-                type=discord.ActivityType.watching,
-                name=f"{PREFIX}help | {len(bot.guilds)} серв."
-            )
-        )
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка в пингере: {e}")
-
-@tasks.loop(minutes=30)
-async def auto_save_data():
-    """Автосохранение данных"""
-    save_data()
-    logger.info("💾 Автосохранение данных выполнено")
-
-@tasks.loop(hours=24)
-async def daily_backup():
-    """Ежедневное резервное копирование"""
-    try:
-        if os.path.exists(DATA_FILE):
-            backup_file = f"backup_{datetime.now().strftime('%Y%m%d')}.json"
-            with open(DATA_FILE, 'r', encoding='utf-8') as src:
-                data = src.read()
-            with open(backup_file, 'w', encoding='utf-8') as dst:
-                dst.write(data)
-            logger.info(f"📦 Создан бэкап: {backup_file}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка создания бэкапа: {e}")
-
-# ========== ПРОВЕРКА ПРАВ ==========
+# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С РОЛЯМИ ==========
 
 def is_admin():
+    """Проверка, является ли пользователь администратором"""
     async def predicate(ctx):
         # Проверка прав администратора Discord
         if ctx.author.guild_permissions.administrator:
@@ -177,8 +68,6 @@ def is_admin():
     
     return commands.check(predicate)
 
-# ========== ВЫДАЧА РОЛЕЙ ==========
-
 async def check_and_assign_roles(member: discord.Member):
     """Проверка и выдача ролей на основе поинтов"""
     try:
@@ -186,7 +75,13 @@ async def check_and_assign_roles(member: discord.Member):
         user_id = member.id
         
         # Получаем поинты пользователя
-        points = get_user_points(user_id, guild_id)
+        points = await db.get_user_points(user_id, guild_id)
+        
+        # Получаем настройки ролей
+        role_settings = await db.get_role_settings(guild_id)
+        
+        if not role_settings:
+            return
         
         # Сортируем роли по количеству поинтов
         sorted_roles = sorted(role_settings.items(), key=lambda x: x[0])
@@ -215,20 +110,6 @@ async def check_and_assign_roles(member: discord.Member):
                     reason="Автоматическое создание роли за поинты"
                 )
                 
-                # Пытаемся переместить роль выше обычных ролей
-                try:
-                    positions = {}
-                    for role in member.guild.roles:
-                        if role.name in ADMIN_ROLES or role.name == '@everyone':
-                            continue
-                        positions[role] = role.position
-                    
-                    if positions:
-                        max_position = max(positions.values())
-                        await discord_role.edit(position=max_position + 1)
-                except:
-                    pass
-                    
                 logger.info(f"Создана новая роль: {role_name} на сервере {member.guild.name}")
                 
             except discord.Forbidden:
@@ -261,6 +142,21 @@ async def check_and_assign_roles(member: discord.Member):
     except Exception as e:
         logger.error(f'Ошибка в check_and_assign_roles: {e}')
 
+# ========== ТАСКИ ДЛЯ 24/7 РАБОТЫ ==========
+
+@tasks.loop(minutes=14)
+async def keep_alive():
+    """Таск для поддержания активности бота"""
+    logger.info(f"🤖 Бот активен | Серверов: {len(bot.guilds)}")
+    
+    # Обновляем статус
+    await bot.change_presence(
+        activity=discord.Activity(
+            type=discord.ActivityType.watching,
+            name=f"{PREFIX}help | {len(bot.guilds)} серв."
+        )
+    )
+
 # ========== СОБЫТИЯ БОТА ==========
 
 @bot.event
@@ -269,21 +165,23 @@ async def on_ready():
     logger.info(f'✅ Бот {bot.user} запущен!')
     logger.info(f'📊 Серверов: {len(bot.guilds)}')
     
-    # Загружаем данные
-    load_data()
+    # Подключаемся к базе данных
+    if await db.connect():
+        logger.info("✅ Подключение к базе данных успешно")
+        
+        # Инициализируем стандартные роли для всех серверов
+        for guild in bot.guilds:
+            try:
+                await db.init_default_roles(guild.id)
+                logger.info(f"✅ Инициализированы роли для сервера: {guild.name}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка инициализации ролей для {guild.name}: {e}")
+    else:
+        logger.error("❌ Не удалось подключиться к базе данных!")
+        logger.error("⚠️  Бот будет работать в ограниченном режиме")
     
-    # Запускаем пингер для 24/7
-    keep_alive_ping.start()
-    auto_save_data.start()
-    daily_backup.start()
-    
-    # Устанавливаем статус
-    await bot.change_presence(
-        activity=discord.Activity(
-            type=discord.ActivityType.watching,
-            name=f"{PREFIX}help | {len(bot.guilds)} серв."
-        )
-    )
+    # Запускаем таск для поддержания активности
+    keep_alive.start()
     
     # Синхронизация slash команд
     try:
@@ -302,16 +200,16 @@ async def add_points(ctx, member: discord.Member, amount: int, reason: str = "В
         embed = discord.Embed(
             title="❌ Ошибка",
             description="Количество поинтов должно быть положительным!",
-            color=discord.Color.red()
+            color=COLORS['error']
         )
         await ctx.send(embed=embed)
         return
     
-    new_total = add_user_points(member.id, ctx.guild.id, amount)
+    new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
     
     embed = discord.Embed(
         title="✅ Поинты выданы!",
-        color=discord.Color.green()
+        color=COLORS['success']
     )
     embed.add_field(name="Получатель", value=member.mention, inline=True)
     embed.add_field(name="Добавлено", value=f"{amount} поинтов", inline=True)
@@ -333,16 +231,16 @@ async def remove_points(ctx, member: discord.Member, amount: int, reason: str = 
         embed = discord.Embed(
             title="❌ Ошибка",
             description="Количество поинтов должно быть положительным!",
-            color=discord.Color.red()
+            color=COLORS['error']
         )
         await ctx.send(embed=embed)
         return
     
-    new_total = remove_user_points(member.id, ctx.guild.id, amount)
+    new_total = await db.remove_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
     
     embed = discord.Embed(
         title="✅ Поинты изъяты!",
-        color=discord.Color.green()
+        color=COLORS['success']
     )
     embed.add_field(name="Пользователь", value=member.mention, inline=True)
     embed.add_field(name="Изъято", value=f"{amount} поинтов", inline=True)
@@ -364,16 +262,16 @@ async def set_points(ctx, member: discord.Member, amount: int, reason: str = "У
         embed = discord.Embed(
             title="❌ Ошибка",
             description="Количество поинтов не может быть отрицательным!",
-            color=discord.Color.red()
+            color=COLORS['error']
         )
         await ctx.send(embed=embed)
         return
     
-    new_total = set_user_points(member.id, ctx.guild.id, amount)
+    new_total = await db.set_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
     
     embed = discord.Embed(
         title="✅ Поинты установлены!",
-        color=discord.Color.green()
+        color=COLORS['success']
     )
     embed.add_field(name="Пользователь", value=member.mention, inline=True)
     embed.add_field(name="Новое значение", value=f"{new_total} поинтов", inline=True)
@@ -394,7 +292,7 @@ async def set_role(ctx, points: int, role_name: str, color: str = "#3498db"):
         embed = discord.Embed(
             title="❌ Ошибка",
             description="Количество поинтов должно быть положительным!",
-            color=discord.Color.red()
+            color=COLORS['error']
         )
         await ctx.send(embed=embed)
         return
@@ -405,14 +303,12 @@ async def set_role(ctx, points: int, role_name: str, color: str = "#3498db"):
     except:
         color = "#3498db"
     
-    # Сохраняем настройку роли
-    role_settings[points] = {'name': role_name, 'color': color}
-    save_data()
+    await db.set_role_setting(ctx.guild.id, points, role_name, color)
     
     embed = discord.Embed(
         title="✅ Роль установлена!",
         description=f"Роль **{role_name}** будет выдаваться за **{points}** поинтов",
-        color=discord.Color.green()
+        color=COLORS['success']
     )
     embed.add_field(name="Цвет роли", value=color, inline=True)
     embed.set_footer(text=f"ID сервера: {ctx.guild.id}")
@@ -426,7 +322,7 @@ async def reset_points(ctx):
     embed = discord.Embed(
         title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
         description="Вы уверены, что хотите сбросить ВСЕ поинты на сервере?\nЭто действие необратимо!",
-        color=discord.Color.red()
+        color=COLORS['error']
     )
     embed.add_field(name="Что будет сброшено:", 
                    value="• Все поинты пользователей\n• Вся история транзакций", 
@@ -439,19 +335,12 @@ async def reset_points(ctx):
             await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
             return
         
-        # Удаляем все записи для этого сервера
-        guild_id = str(ctx.guild.id)
-        keys_to_remove = [key for key in points_data.keys() if key.startswith(guild_id + '_')]
-        
-        for key in keys_to_remove:
-            del points_data[key]
-        
-        save_data()
+        await db.reset_guild_points(ctx.guild.id)
         
         confirm_embed = discord.Embed(
             title="✅ Все поинты сброшены!",
-            description=f"Удалено {len(keys_to_remove)} записей пользователей.",
-            color=discord.Color.green()
+            description="Все данные о поинтах на этом сервере были удалены.",
+            color=COLORS['success']
         )
         await interaction.response.edit_message(embed=confirm_embed, view=None)
     
@@ -462,7 +351,7 @@ async def reset_points(ctx):
         
         cancel_embed = discord.Embed(
             title="❌ Сброс отменен",
-            color=discord.Color.orange()
+            color=COLORS['warning']
         )
         await interaction.response.edit_message(embed=cancel_embed, view=None)
     
@@ -488,17 +377,20 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     user_id = member.id
     guild_id = ctx.guild.id
     
-    # Получаем данные
-    points = get_user_points(user_id, guild_id)
+    # Получаем данные из базы
+    points = await db.get_user_points(user_id, guild_id)
+    position = await db.get_user_position(user_id, guild_id)
+    role_settings = await db.get_role_settings(guild_id)
     
     # Создаем embed
     embed = discord.Embed(
         title=f"🏆 Поинты {member.display_name}",
-        color=discord.Color.gold()
+        color=COLORS['points']
     )
     
     # Основная информация
     embed.add_field(name="Баланс", value=f"**{points}** поинтов", inline=True)
+    embed.add_field(name="Позиция в рейтинге", value=f"**#{position}**", inline=True)
     
     # Система ролей
     if role_settings:
@@ -555,31 +447,26 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
 @bot.hybrid_command(name='leaderboard', description='Таблица лидеров по поинтам')
 async def leaderboard(ctx, page: int = 1):
     """Таблица лидеров"""
-    guild_id = str(ctx.guild.id)
+    guild_id = ctx.guild.id
     
-    # Фильтруем пользователей только этого сервера
-    server_users = {}
-    for key, points in points_data.items():
-        if key.startswith(guild_id + '_'):
-            user_id = key.split('_')[1]
-            server_users[user_id] = points
+    # Получаем лидерборд из базы
+    leaderboard_data = await db.get_leaderboard(guild_id, 100)  # Берем больше для пагинации
     
-    if not server_users:
+    if not leaderboard_data:
         embed = discord.Embed(
             title="📊 Таблица лидеров",
             description="Пока никто не имеет поинтов!",
-            color=discord.Color.blue()
+            color=COLORS['info']
         )
         await ctx.send(embed=embed)
         return
     
-    # Сортируем по убыванию
-    sorted_users = sorted(server_users.items(), key=lambda x: x[1], reverse=True)
+    # Получаем статистику
+    stats = await db.get_guild_stats(guild_id)
     
     # Пагинация
     limit = 10
-    total_pages = (len(sorted_users) + limit - 1) // limit
-    
+    total_pages = (len(leaderboard_data) + limit - 1) // limit
     if page < 1:
         page = 1
     if page > total_pages:
@@ -587,12 +474,12 @@ async def leaderboard(ctx, page: int = 1):
     
     start_idx = (page - 1) * limit
     end_idx = start_idx + limit
-    page_data = sorted_users[start_idx:end_idx]
+    page_data = leaderboard_data[start_idx:end_idx]
     
     # Создаем embed
     embed = discord.Embed(
         title="🏆 Таблица лидеров",
-        color=discord.Color.gold()
+        color=COLORS['points']
     )
     
     # Добавляем записи
@@ -600,7 +487,7 @@ async def leaderboard(ctx, page: int = 1):
     
     for i, (user_id, user_points) in enumerate(page_data, start=1):
         try:
-            member = await ctx.guild.fetch_member(int(user_id))
+            member = await ctx.guild.fetch_member(user_id)
             username = member.display_name
         except:
             username = f"Пользователь ({user_id})"
@@ -609,6 +496,7 @@ async def leaderboard(ctx, page: int = 1):
         
         # Определяем роль
         user_role = "Нет роли"
+        role_settings = await db.get_role_settings(guild_id)
         if role_settings:
             sorted_roles = sorted(role_settings.items(), key=lambda x: x[0], reverse=True)
             for points_required, role_info in sorted_roles:
@@ -623,33 +511,31 @@ async def leaderboard(ctx, page: int = 1):
         )
     
     # Статистика
-    total_points = sum(server_users.values())
-    avg_points = total_points / len(server_users) if server_users else 0
-    max_points = max(server_users.values()) if server_users else 0
-    
     embed.add_field(
         name="📊 Статистика сервера",
-        value=f"• Всего пользователей: **{len(server_users)}**\n"
-              f"• Всего поинтов: **{total_points}**\n"
-              f"• Среднее: **{avg_points:.1f}**\n"
-              f"• Максимум: **{max_points}**",
+        value=f"• Всего пользователей: **{stats['total_users']}**\n"
+              f"• Всего поинтов: **{stats['total_points']}**\n"
+              f"• Среднее: **{stats['avg_points']:.1f}**\n"
+              f"• Максимум: **{stats['max_points']}**",
         inline=False
     )
     
     # Пагинация
     if total_pages > 1:
-        embed.set_footer(text=f"Страница {page}/{total_pages} | Всего участников: {len(server_users)}")
+        embed.set_footer(text=f"Страница {page}/{total_pages} | Всего участников: {stats['total_users']}")
     
     await ctx.send(embed=embed)
 
 @bot.hybrid_command(name='roles', description='Показать систему ролей')
 async def show_roles(ctx):
     """Показать систему ролей"""
+    role_settings = await db.get_role_settings(ctx.guild.id)
+    
     if not role_settings:
         embed = discord.Embed(
             title="🏅 Система ролей",
             description="Система ролей не настроена.\nАдмины могут настроить с помощью `/setrole`",
-            color=discord.Color.blue()
+            color=COLORS['info']
         )
         await ctx.send(embed=embed)
         return
@@ -657,7 +543,7 @@ async def show_roles(ctx):
     embed = discord.Embed(
         title="🏅 Система ролей",
         description="Роли выдаются автоматически при достижении определенного количества поинтов",
-        color=discord.Color.gold()
+        color=COLORS['points']
     )
     
     sorted_roles = sorted(role_settings.items(), key=lambda x: x[0])
@@ -682,13 +568,13 @@ async def ping_command(ctx):
     
     embed = discord.Embed(
         title="🏓 Понг!",
-        color=discord.Color.green()
+        color=COLORS['success']
     )
     embed.add_field(name="Задержка API", value=f"**{latency}мс**", inline=True)
     embed.add_field(name="Серверов", value=f"**{len(bot.guilds)}**", inline=True)
-    embed.add_field(name="Пользователей в базе", value=f"**{len(points_data)}**", inline=True)
-    embed.add_field(name="Статус", value="✅ **24/7 Активен**", inline=False)
-    embed.set_footer(text="Бот автоматически сохраняет данные каждые 30 минут")
+    embed.add_field(name="Статус БД", value="✅ **Подключена**", inline=True)
+    embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
+    embed.set_footer(text="Бот работает на Render с PostgreSQL")
     
     await ctx.send(embed=embed)
 
@@ -705,7 +591,7 @@ async def help_command(ctx):
     embed = discord.Embed(
         title="🆘 Помощь по командам",
         description=f"Префикс команд: `{PREFIX}`\nБот также поддерживает slash-команды (/)",
-        color=discord.Color.blue()
+        color=COLORS['info']
     )
     
     # Команды для всех
@@ -735,102 +621,13 @@ async def help_command(ctx):
     embed.add_field(
         name="ℹ️ Информация о боте",
         value=f"• Админские роли: {', '.join(ADMIN_ROLES)}\n"
-              f"• Данные хранятся в JSON файле\n"
-              f"• Автосохранение каждые 30 минут\n"
-              f"• Бэкапы каждый день\n"
-              f"• Пингер для 24/7 работы\n"
-              f"• Пользователей в базе: {len(points_data)}",
+              f"• База данных: PostgreSQL\n"
+              f"• Хостинг: Render.com\n"
+              f"• Режим работы: 24/7",
         inline=False
     )
     
     await ctx.send(embed=embed)
-
-# ========== ДОПОЛНИТЕЛЬНЫЕ КОМАНДЫ ==========
-
-@bot.hybrid_command(name='admininfo', description='Информация для администраторов')
-@is_admin()
-async def admin_info(ctx):
-    """Информация для администраторов"""
-    guild_id = str(ctx.guild.id)
-    
-    # Подсчет пользователей на сервере
-    server_users = {}
-    for key, points in points_data.items():
-        if key.startswith(guild_id + '_'):
-            user_id = key.split('_')[1]
-            server_users[user_id] = points
-    
-    total_points = sum(server_users.values())
-    
-    embed = discord.Embed(
-        title="🛡️ Информация для администраторов",
-        color=discord.Color.purple()
-    )
-    
-    embed.add_field(
-        name="📊 Статистика сервера",
-        value=f"• Пользователей с поинтами: **{len(server_users)}**\n"
-              f"• Всего поинтов на сервере: **{total_points}**\n"
-              f"• Настроено ролей: **{len(role_settings)}**",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🔧 Управление системой",
-        value="• Используйте `/setrole` для настройки ролей\n"
-              "• `/resetpoints` сбрасывает ВСЕ данные сервера\n"
-              "• Данные сохраняются автоматически",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="⚙️ Техническая информация",
-        value=f"• Файл данных: `{DATA_FILE}`\n"
-              f"• Бот активен 24/7\n"
-              f"• Последнее сохранение: {datetime.now().strftime('%H:%M:%S')}",
-        inline=False
-    )
-    
-    await ctx.send(embed=embed)
-
-@bot.hybrid_command(name='fixroles', description='Принудительно проверить и выдать роли всем пользователям')
-@is_admin()
-async def fix_roles(ctx):
-    """Принудительно проверить и выдать роли"""
-    embed = discord.Embed(
-        title="🔄 Проверка ролей",
-        description="Начинаю проверку ролей для всех пользователей...",
-        color=discord.Color.blue()
-    )
-    message = await ctx.send(embed=embed)
-    
-    guild_id = str(ctx.guild.id)
-    processed = 0
-    
-    # Ищем пользователей этого сервера
-    for key in points_data.keys():
-        if key.startswith(guild_id + '_'):
-            user_id = int(key.split('_')[1])
-            
-            try:
-                member = await ctx.guild.fetch_member(user_id)
-                await check_and_assign_roles(member)
-                processed += 1
-                
-                # Обновляем сообщение каждые 10 пользователей
-                if processed % 10 == 0:
-                    embed.description = f"Обработано {processed} пользователей..."
-                    await message.edit(embed=embed)
-                    
-            except:
-                pass
-    
-    embed = discord.Embed(
-        title="✅ Проверка завершена",
-        description=f"Обработано {processed} пользователей",
-        color=discord.Color.green()
-    )
-    await message.edit(embed=embed)
 
 # ========== ОБРАБОТКА ОШИБОК ==========
 
@@ -841,21 +638,21 @@ async def on_command_error(ctx, error):
         embed = discord.Embed(
             title="❌ Недостаточно прав",
             description=f"Только **{', '.join(ADMIN_ROLES)}** могут использовать эту команду!",
-            color=discord.Color.red()
+            color=COLORS['error']
         )
         await ctx.send(embed=embed)
     elif isinstance(error, commands.MissingRequiredArgument):
         embed = discord.Embed(
             title="❌ Не хватает аргументов",
             description=f"Используйте `{PREFIX}help` для справки по командам",
-            color=discord.Color.red()
+            color=COLORS['error']
         )
         await ctx.send(embed=embed)
     elif isinstance(error, commands.BadArgument):
         embed = discord.Embed(
             title="❌ Неправильные аргументы",
             description="Проверьте правильность введенных данных",
-            color=discord.Color.red()
+            color=COLORS['error']
         )
         await ctx.send(embed=embed)
     elif isinstance(error, commands.CommandNotFound):
@@ -864,26 +661,18 @@ async def on_command_error(ctx, error):
         logger.error(f"Необработанная ошибка команды: {error}")
         embed = discord.Embed(
             title="❌ Неизвестная ошибка",
-            description="Произошла неизвестная ошибка. Администраторы уведомлены.",
-            color=discord.Color.red()
+            description="Произошла неизвестная ошибка.",
+            color=COLORS['error']
         )
         await ctx.send(embed=embed)
 
 # ========== ЗАПУСК БОТА ==========
 
 if __name__ == "__main__":
-    if not TOKEN:
-        logger.error("❌ Токен бота не найден! Установите переменную окружения DISCORD_TOKEN")
-        logger.info("📝 Создайте файл .env с содержимым:")
-        logger.info("DISCORD_TOKEN=your_token_here")
-        logger.info("BOT_PREFIX=!")
-        logger.info("ADMIN_ROLES=The Owner,Co-Owner")
-        exit(1)
-    
-    logger.info("🚀 Запуск Discord Points Bot (без БД)")
+    logger.info("🚀 Запуск Discord Points Bot с PostgreSQL")
     logger.info(f"🤖 Префикс команд: {PREFIX}")
     logger.info(f"👑 Админские роли: {ADMIN_ROLES}")
-    logger.info("🔄 Бот будет работать 24/7 с пингером")
+    logger.info("🗄️  Используется база данных PostgreSQL")
     
     try:
         bot.run(TOKEN)
