@@ -832,6 +832,43 @@ async def fix_roles(ctx):
     )
     await message.edit(embed=embed)
 
+# ========== ОБРАБОТКА ОШИБОК ==========
+
+@bot.event
+async def on_command_error(ctx, error):
+    """Обработка ошибок команд"""
+    if isinstance(error, commands.CheckFailure):
+        embed = discord.Embed(
+            title="❌ Недостаточно прав",
+            description=f"Только **{', '.join(ADMIN_ROLES)}** могут использовать эту команду!",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+    elif isinstance(error, commands.MissingRequiredArgument):
+        embed = discord.Embed(
+            title="❌ Не хватает аргументов",
+            description=f"Используйте `{PREFIX}help` для справки по командам",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+    elif isinstance(error, commands.BadArgument):
+        embed = discord.Embed(
+            title="❌ Неправильные аргументы",
+            description="Проверьте правильность введенных данных",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+    elif isinstance(error, commands.CommandNotFound):
+        pass  # Игнорируем
+    else:
+        logger.error(f"Необработанная ошибка команды: {error}")
+        embed = discord.Embed(
+            title="❌ Неизвестная ошибка",
+            description="Произошла неизвестная ошибка. Администраторы уведомлены.",
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+
 # ========== ЗАПУСК БОТА ==========
 
 if __name__ == "__main__":
