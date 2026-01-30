@@ -90,6 +90,15 @@ class Database:
                 )
             ''')
             
+            # Таблица каналов уведомлений
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS notification_channels (
+                    guild_id BIGINT PRIMARY KEY,
+                    channel_id BIGINT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
             # Создаем стандартные роли
             await self.create_default_roles()
             
@@ -252,6 +261,35 @@ class Database:
         for points, name, color in default_roles:
             if points not in current_roles:
                 await self.set_role_setting(guild_id, points, name, color)
+    
+    # ========== МЕТОДЫ ДЛЯ УВЕДОМЛЕНИЙ ==========
+    
+    async def get_notification_channel(self, guild_id: int) -> Optional[int]:
+        """Получить ID канала для уведомлений"""
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow(
+                'SELECT channel_id FROM notification_channels WHERE guild_id = $1',
+                guild_id
+            )
+            return result['channel_id'] if result else None
+    
+    async def set_notification_channel(self, guild_id: int, channel_id: int):
+        """Установить канал для уведомлений"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO notification_channels (guild_id, channel_id)
+                VALUES ($1, $2)
+                ON CONFLICT (guild_id)
+                DO UPDATE SET channel_id = EXCLUDED.channel_id
+            ''', guild_id, channel_id)
+    
+    async def remove_notification_channel(self, guild_id: int):
+        """Удалить канал для уведомлений"""
+        async with self.pool.acquire() as conn:
+            await conn.execute(
+                'DELETE FROM notification_channels WHERE guild_id = $1',
+                guild_id
+            )
     
     # ========== МЕТОДЫ ДЛЯ ЛИДЕРБОРДА ==========
     
