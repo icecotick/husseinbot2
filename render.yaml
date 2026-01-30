@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: discord-points-bot
+    name: husseinbot2
     env: python
     plan: free
     region: frankfurt
