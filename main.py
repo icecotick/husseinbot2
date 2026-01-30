@@ -127,21 +127,25 @@ async def check_and_assign_roles(member: discord.Member):
         role_settings = await db.get_role_settings(guild_id)
         
         if not role_settings:
-            return
+            return None
         
         # Сортируем роли по количеству поинтов
         sorted_roles = sorted(role_settings.items(), key=lambda x: x[0])
         
-        # Находим самую высокую доступную роль
-        highest_role = None
+        # Находим текущую и следующую роль
+        current_role = None
+        next_role = None
+        
         for points_required, role_info in sorted_roles:
             if points >= points_required:
-                highest_role = role_info
+                current_role = role_info
+            elif next_role is None and points < points_required:
+                next_role = role_info
         
-        if not highest_role:
-            return
+        if not current_role:
+            return None
         
-        role_name = highest_role['name']
+        role_name = current_role['name']
         
         # Находим или создаем роль на сервере
         discord_role = discord.utils.get(member.guild.roles, name=role_name)
@@ -149,10 +153,12 @@ async def check_and_assign_roles(member: discord.Member):
         if not discord_role:
             # Создаем новую роль
             try:
-                color = discord.Color.from_str(highest_role.get('color', '#3498db'))
+                color = discord.Color.from_str(current_role.get('color', '#3498db'))
                 discord_role = await member.guild.create_role(
                     name=role_name,
                     color=color,
+                    hoist=True,
+                    mentionable=True,
                     reason="Автоматическое создание роли за поинты"
                 )
                 
@@ -160,33 +166,155 @@ async def check_and_assign_roles(member: discord.Member):
                 
             except discord.Forbidden:
                 logger.error(f'Недостаточно прав для создания роли {role_name}')
-                return
+                return None
             except Exception as e:
                 logger.error(f'Ошибка создания роли: {e}')
-                return
+                return None
         
-        # Удаляем старые роли за поинты (только более низкие)
+        # Проверяем, есть ли уже эта роль у пользователя
+        if discord_role in member.roles:
+            return None
+        
+        # Находим старые роли за поинты (только более низкие)
+        old_roles_to_remove = []
         for points_required, role_info in sorted_roles:
-            if role_info['name'] != role_name:
+            if role_info['name'] != role_name and points_required < current_role['points_required']:
                 old_role = discord.utils.get(member.guild.roles, name=role_info['name'])
                 if old_role and old_role in member.roles:
-                    try:
-                        await member.remove_roles(old_role)
-                    except:
-                        pass
+                    old_roles_to_remove.append(old_role)
+        
+        # Удаляем старые роли
+        removed_roles = []
+        for old_role in old_roles_to_remove:
+            try:
+                await member.remove_roles(old_role)
+                removed_roles.append(old_role.name)
+            except:
+                pass
         
         # Добавляем новую роль
-        if discord_role and discord_role not in member.roles:
-            try:
-                await member.add_roles(discord_role)
-                logger.info(f'Выдана роль {role_name} пользователю {member.display_name} ({points} поинтов)')
-            except discord.Forbidden:
-                logger.error(f'Недостаточно прав для выдачи роли {role_name}')
-            except Exception as e:
-                logger.error(f'Ошибка выдачи роли: {e}')
-                
+        try:
+            await member.add_roles(discord_role)
+            logger.info(f'Выдана роль {role_name} пользователю {member.display_name} ({points} поинтов)')
+            
+            # Возвращаем информацию для уведомления
+            return {
+                'member': member,
+                'role': discord_role,
+                'old_roles': removed_roles,
+                'points': points,
+                'next_role': next_role
+            }
+            
+        except discord.Forbidden:
+            logger.error(f'Недостаточно прав для выдачи роли {role_name}')
+        except Exception as e:
+            logger.error(f'Ошибка выдачи роли: {e}')
+            
+        return None
+        
     except Exception as e:
         logger.error(f'Ошибка в check_and_assign_roles: {e}')
+        return None
+
+async def send_role_notification(guild: discord.Guild, role_info: dict):
+    """Отправить уведомление о получении роли"""
+    try:
+        # Получаем канал для уведомлений
+        channel_id = await db.get_notification_channel(guild.id)
+        
+        # Если канал не установлен, отправляем в системный канал
+        if channel_id:
+            channel = guild.get_channel(channel_id)
+            if not channel:
+                # Пробуем получить канал по ID
+                try:
+                    channel = await guild.fetch_channel(channel_id)
+                except:
+                    channel = None
+        else:
+            # Ищем канал по умолчанию
+            channel = guild.system_channel
+        
+        if not channel:
+            logger.warning(f"Не найден канал для уведомлений на сервере {guild.name}")
+            return
+        
+        member = role_info['member']
+        role = role_info['role']
+        old_roles = role_info['old_roles']
+        points = role_info['points']
+        next_role = role_info['next_role']
+        
+        # Создаем красивое уведомление
+        embed = discord.Embed(
+            title="🎉 Поздравляем! 🎉",
+            description=f"**{member.mention} получил новую роль!**",
+            color=role.color
+        )
+        
+        embed.add_field(
+            name="🏅 Новая роль",
+            value=f"**{role.mention}**",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📊 Текущие поинты",
+            value=f"**{points}**",
+            inline=True
+        )
+        
+        if old_roles:
+            embed.add_field(
+                name="🔄 Снятые роли",
+                value=", ".join([f"`{r}`" for r in old_roles]),
+                inline=False
+            )
+        
+        if next_role:
+            next_points = None
+            role_settings = await db.get_role_settings(guild.id)
+            for points_required, info in role_settings.items():
+                if info['name'] == next_role['name']:
+                    next_points = points_required
+                    break
+            
+            if next_points:
+                needed = next_points - points
+                embed.add_field(
+                    name="🎯 Следующая цель",
+                    value=f"**{next_role['name']}**\n"
+                          f"Нужно ещё **{needed}** поинтов",
+                    inline=False
+                )
+        
+        # Добавляем прогресс-бар
+        if role_settings:
+            max_points = max(role_settings.keys())
+            progress = min(100, int((points / max_points) * 100)) if max_points > 0 else 0
+            
+            # Создаем прогресс-бар
+            bar_length = 20
+            filled = int(progress / 100 * bar_length)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            
+            embed.add_field(
+                name="📈 Общий прогресс",
+                value=f"`{bar}` **{progress}%**",
+                inline=False
+            )
+        
+        embed.set_thumbnail(url=member.display_avatar.url)
+        embed.set_footer(text=f"ID: {member.id} | {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        
+        # Отправляем уведомление
+        await channel.send(embed=embed)
+        
+        logger.info(f"✅ Отправлено уведомление о роли {role.name} для {member.display_name}")
+        
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления: {e}")
 
 # ========== ТАСКИ ДЛЯ 24/7 РАБОТЫ ==========
 
@@ -243,6 +371,44 @@ async def on_ready():
     except Exception as e:
         logger.error(f'❌ Ошибка синхронизации команд: {e}')
 
+@bot.event
+async def on_member_update(before: discord.Member, after: discord.Member):
+    """Событие при изменении участника"""
+    try:
+        # Проверяем, добавились ли новые роли
+        new_roles = set(after.roles) - set(before.roles)
+        
+        if new_roles:
+            # Проверяем, связана ли новая роль с системой поинтов
+            role_settings = await db.get_role_settings(after.guild.id)
+            if role_settings:
+                role_names = [info['name'] for info in role_settings.values()]
+                for role in new_roles:
+                    if role.name in role_names:
+                        # Отправляем уведомление
+                        points = await db.get_user_points(after.id, after.guild.id)
+                        
+                        # Находим следующую роль
+                        next_role = None
+                        sorted_roles = sorted(role_settings.items(), key=lambda x: x[0])
+                        for points_required, role_info in sorted_roles:
+                            if points < points_required:
+                                next_role = role_info
+                                break
+                        
+                        role_info = {
+                            'member': after,
+                            'role': role,
+                            'old_roles': [],
+                            'points': points,
+                            'next_role': next_role
+                        }
+                        
+                        await send_role_notification(after.guild, role_info)
+                        break
+    except Exception as e:
+        logger.error(f"Ошибка в on_member_update: {e}")
+
 # ========== КОМАНДЫ ДЛЯ АДМИНОВ ==========
 
 @bot.hybrid_command(name='addpoints', description='Выдать поинты пользователю')
@@ -274,7 +440,9 @@ async def add_points(ctx, member: discord.Member, amount: int, reason: str = "В
     await ctx.send(embed=embed)
     
     # Проверяем и выдаем роли
-    await check_and_assign_roles(member)
+    role_info = await check_and_assign_roles(member)
+    if role_info:
+        await send_role_notification(ctx.guild, role_info)
 
 @bot.hybrid_command(name='removepoints', description='Забрать поинты у пользователя')
 @is_admin()
@@ -305,7 +473,9 @@ async def remove_points(ctx, member: discord.Member, amount: int, reason: str = 
     await ctx.send(embed=embed)
     
     # Проверяем и обновляем роли
-    await check_and_assign_roles(member)
+    role_info = await check_and_assign_roles(member)
+    if role_info:
+        await send_role_notification(ctx.guild, role_info)
 
 @bot.hybrid_command(name='setpoints', description='Установить точное количество поинтов')
 @is_admin()
@@ -335,7 +505,9 @@ async def set_points(ctx, member: discord.Member, amount: int, reason: str = "У
     await ctx.send(embed=embed)
     
     # Проверяем и выдаем роли
-    await check_and_assign_roles(member)
+    role_info = await check_and_assign_roles(member)
+    if role_info:
+        await send_role_notification(ctx.guild, role_info)
 
 @bot.hybrid_command(name='setrole', description='Установить роль за определенное количество поинтов')
 @is_admin()
@@ -418,6 +590,109 @@ async def reset_points(ctx):
     view.add_item(cancel_button)
     
     await ctx.send(embed=embed, view=view)
+
+@bot.hybrid_command(name='setnotify', description='Установить канал для уведомлений о ролях')
+@is_admin()
+async def set_notify_channel(ctx, channel: Optional[discord.TextChannel] = None):
+    """Установить канал для уведомлений о ролях"""
+    if channel is None:
+        channel = ctx.channel
+    
+    await db.set_notification_channel(ctx.guild.id, channel.id)
+    
+    embed = discord.Embed(
+        title="✅ Канал уведомлений установлен!",
+        description=f"Уведомления о получении ролей будут отправляться в {channel.mention}",
+        color=COLORS['success']
+    )
+    embed.add_field(
+        name="📢 Пример уведомления",
+        value="Когда участник достигнет нужного количества поинтов,\n"
+              "в этом канале появится красивое уведомление о новой роли!",
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
+
+@bot.hybrid_command(name='removenotify', description='Отключить уведомления о ролях')
+@is_admin()
+async def remove_notify_channel(ctx):
+    """Отключить уведомления о ролях"""
+    await db.remove_notification_channel(ctx.guild.id)
+    
+    embed = discord.Embed(
+        title="✅ Уведомления отключены",
+        description="Уведомления о получении ролей больше не будут отправляться",
+        color=COLORS['warning']
+    )
+    
+    await ctx.send(embed=embed)
+
+@bot.hybrid_command(name='testnotify', description='Тестовое уведомление о роли')
+@is_admin()
+async def test_notification(ctx, member: Optional[discord.Member] = None):
+    """Отправить тестовое уведомление"""
+    if member is None:
+        member = ctx.author
+    
+    # Получаем текущую роль пользователя
+    points = await db.get_user_points(member.id, ctx.guild.id)
+    role_settings = await db.get_role_settings(ctx.guild.id)
+    
+    if not role_settings:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Сначала настройте систему ролей!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Находим самую высокую роль
+    current_role_info = None
+    sorted_roles = sorted(role_settings.items(), key=lambda x: x[0])
+    for points_required, role_info in sorted(sorted_roles, key=lambda x: x[0], reverse=True):
+        if points >= points_required:
+            current_role_info = role_info
+            break
+    
+    if not current_role_info:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="У пользователя нет роли за поинты",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    role = discord.utils.get(ctx.guild.roles, name=current_role_info['name'])
+    
+    if not role:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Роль не найдена на сервере",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Создаем тестовое уведомление
+    role_info = {
+        'member': member,
+        'role': role,
+        'old_roles': ['Пример роли 1', 'Пример роли 2'],
+        'points': points,
+        'next_role': None
+    }
+    
+    await send_role_notification(ctx.guild, role_info)
+    
+    embed = discord.Embed(
+        title="✅ Тестовое уведомление отправлено!",
+        description="Проверьте канал с уведомлениями",
+        color=COLORS['success']
+    )
+    await ctx.send(embed=embed, ephemeral=True)
 
 # ========== КОМАНДЫ ДЛЯ ВСЕХ ПОЛЬЗОВАТЕЛЕЙ ==========
 
@@ -503,7 +778,7 @@ async def leaderboard(ctx, page: int = 1):
     guild_id = ctx.guild.id
     
     # Получаем лидерборд из базы
-    leaderboard_data = await db.get_leaderboard(guild_id, 100)  # Берем больше для пагинации
+    leaderboard_data = await db.get_leaderboard(guild_id, 100)
     
     if not leaderboard_data:
         embed = discord.Embed(
@@ -593,11 +868,25 @@ async def show_roles(ctx):
         await ctx.send(embed=embed)
         return
     
+    # Проверяем настройку уведомлений
+    notify_channel_id = await db.get_notification_channel(ctx.guild.id)
+    notify_status = "✅ **Включены**" if notify_channel_id else "❌ **Выключены**"
+    
     embed = discord.Embed(
         title="🏅 Система ролей",
-        description="Роли выдаются автоматически при достижении определенного количества поинтов",
+        description=f"Роли выдаются автоматически при достижении определенного количества поинтов\n"
+                   f"Уведомления: {notify_status}",
         color=COLORS['points']
     )
+    
+    if notify_channel_id:
+        channel = ctx.guild.get_channel(notify_channel_id)
+        if channel:
+            embed.add_field(
+                name="📢 Канал уведомлений",
+                value=channel.mention,
+                inline=False
+            )
     
     sorted_roles = sorted(role_settings.items(), key=lambda x: x[0])
     
@@ -611,7 +900,7 @@ async def show_roles(ctx):
             inline=True
         )
     
-    embed.set_footer(text="Админские роли: " + ", ".join(ADMIN_ROLES))
+    embed.set_footer(text=f"Используйте {PREFIX}setnotify для настройки уведомлений")
     await ctx.send(embed=embed)
 
 @bot.hybrid_command(name='ping', description='Проверить пинг бота')
@@ -627,6 +916,7 @@ async def ping_command(ctx):
     embed.add_field(name="Серверов", value=f"**{len(bot.guilds)}**", inline=True)
     embed.add_field(name="Порт", value=f"**{PORT}**", inline=True)
     embed.add_field(name="Статус БД", value="✅ **Подключена**", inline=True)
+    embed.add_field(name="Уведомления", value="✅ **Активны**", inline=True)
     embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
     embed.set_footer(text=f"Эндпоинт для пинга: /ping")
     
@@ -667,6 +957,9 @@ async def help_command(ctx):
                   "• `/removepoints @пользователь количество [причина]` - Забрать поинты\n"
                   "• `/setpoints @пользователь количество [причина]` - Установить поинты\n"
                   "• `/setrole количество \"название роли\" [цвет]` - Установить роль\n"
+                  "• `/setnotify [канал]` - Установить канал для уведомлений\n"
+                  "• `/removenotify` - Отключить уведомления\n"
+                  "• `/testnotify [@пользователь]` - Тест уведомления\n"
                   "• `/resetpoints` - Сбросить все поинты",
             inline=False
         )
@@ -675,6 +968,7 @@ async def help_command(ctx):
     embed.add_field(
         name="ℹ️ Информация о боте",
         value=f"• Админские роли: {', '.join(ADMIN_ROLES)}\n"
+              f"• Уведомления о ролях: ✅ Включены\n"
               f"• База данных: PostgreSQL\n"
               f"• Хостинг: Render.com\n"
               f"• Порт: {PORT}\n"
@@ -729,6 +1023,7 @@ if __name__ == "__main__":
     logger.info(f"👑 Админские роли: {ADMIN_ROLES}")
     logger.info(f"🌐 Порт веб-сервера: {PORT}")
     logger.info("🗄️  Используется база данных PostgreSQL")
+    logger.info("🔔 Система уведомлений о ролях: АКТИВНА")
     logger.info("🔄 Бот будет работать 24/7 с веб-сервером для пинга")
     
     try:
