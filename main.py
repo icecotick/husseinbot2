@@ -245,33 +245,193 @@ async def on_ready():
 
 # ========== КОМАНДЫ ДЛЯ АДМИНОВ ==========
 
-@bot.hybrid_command(name='addpoints', description='Выдать поинты пользователю')
+@bot.hybrid_command(
+    name='addpoints',
+    description='Выдать поинты одному или нескольким пользователям'
+)
 @is_admin()
-async def add_points(ctx, member: discord.Member, amount: int, reason: str = "Выдано админом"):
-    """Выдать поинты пользователю"""
-    if amount <= 0:
+async def add_points(
+    ctx,
+    members: commands.Greedy[discord.Member],  # Множество пользователей
+    amount: int,  # Количество поинтов
+    *, reason: str = "Выдано админом"  # Причина
+):
+    """
+    Выдать поинты одному или нескольким пользователям
+    
+    Примеры использования:
+    !addpoints @User1 100 Награда
+    !addpoints @User1 @User2 @User3 50 Общая награда
+    !addpoints @User1 100
+    """
+    
+    try:
+        # Проверка аргументов
+        if not members:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description="Не указан пользователь!",
+                color=COLORS['error']
+            )
+            embed.add_field(
+                name="Примеры использования:",
+                value="• `!addpoints @пользователь 100`\n"
+                      "• `!addpoints @пользователь1 @пользователь2 50 Награда`",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+            return
+        
+        if amount <= 0:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description="Количество поинтов должно быть положительным!",
+                color=COLORS['error']
+            )
+            await ctx.send(embed=embed)
+            return
+        
+        if len(members) > 20:
+            embed = discord.Embed(
+                title="❌ Слишком много пользователей",
+                description="Можно выдать поинты не более чем 20 пользователям за раз.",
+                color=COLORS['error']
+            )
+            await ctx.send(embed=embed)
+            return
+        
+        # Если один пользователь - старый формат
+        if len(members) == 1:
+            member = members[0]
+            new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+            
+            embed = discord.Embed(
+                title="✅ Поинты выданы!",
+                color=COLORS['success']
+            )
+            embed.add_field(name="Получатель", value=member.mention, inline=True)
+            embed.add_field(name="Добавлено", value=f"{amount} поинтов", inline=True)
+            embed.add_field(name="Новый баланс", value=f"{new_total} поинтов", inline=True)
+            embed.add_field(name="Причина", value=reason, inline=False)
+            embed.add_field(name="Выдал", value=ctx.author.mention, inline=True)
+            embed.set_footer(text=f"ID: {member.id}")
+            
+            await ctx.send(embed=embed)
+            
+            # Проверяем и выдаем роли
+            await check_and_assign_roles(member)
+            
+        # Если несколько пользователей
+        else:
+            # Начинаем выдачу
+            processing_embed = discord.Embed(
+                title="🔄 Выдача поинтов...",
+                description=f"Выдача {amount} поинтов {len(members)} пользователям",
+                color=COLORS['info']
+            )
+            processing_embed.add_field(name="Причина", value=reason, inline=False)
+            processing_embed.set_footer(text="Подождите, идет обработка...")
+            
+            message = await ctx.send(embed=processing_embed)
+            
+            # Выдаем поинты всем пользователям
+            results = []
+            for member in members:
+                try:
+                    new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+                    results.append({
+                        'member': member,
+                        'success': True,
+                        'new_total': new_total
+                    })
+                    
+                    # Проверяем и выдаем роли
+                    await check_and_assign_roles(member)
+                    
+                except Exception as e:
+                    logger.error(f"Ошибка выдачи поинтов {member}: {e}")
+                    results.append({
+                        'member': member,
+                        'success': False,
+                        'error': str(e)
+                    })
+            
+            # Создаем итоговый отчет
+            success_count = sum(1 for r in results if r['success'])
+            failed_count = len(results) - success_count
+            
+            # Основной embed с итогами
+            final_embed = discord.Embed(
+                title="✅ Выдача поинтов завершена!",
+                color=COLORS['success'] if failed_count == 0 else COLORS['warning']
+            )
+            
+            # Сводка
+            summary = f"**Успешно:** {success_count} пользователей\n"
+            if failed_count > 0:
+                summary += f"**Не удалось:** {failed_count} пользователей\n"
+            summary += f"**Количество поинтов:** {amount} каждому\n"
+            summary += f"**Причина:** {reason}"
+            
+            final_embed.add_field(name="📊 Сводка", value=summary, inline=False)
+            
+            # Список пользователей (первые 10)
+            if len(members) <= 10:
+                users_list = ""
+                for result in results:
+                    if result['success']:
+                        users_list += f"✅ {result['member'].mention} → **{result['new_total']}** поинтов\n"
+                    else:
+                        users_list += f"❌ {result['member'].mention} → Ошибка\n"
+                
+                final_embed.add_field(
+                    name="👥 Пользователи",
+                    value=users_list,
+                    inline=False
+                )
+            else:
+                # Если много пользователей, показываем только успешных/неуспешных
+                if success_count > 0:
+                    final_embed.add_field(
+                        name=f"✅ Успешно ({success_count})",
+                        value=f"Поинты выданы {success_count} пользователям",
+                        inline=True
+                    )
+                if failed_count > 0:
+                    final_embed.add_field(
+                        name=f"❌ Ошибки ({failed_count})",
+                        value=f"Не удалось выдать {failed_count} пользователям",
+                        inline=True
+                    )
+            
+            final_embed.add_field(name="👑 Выдал", value=ctx.author.mention, inline=True)
+            final_embed.set_footer(text=f"Всего пользователей: {len(members)}")
+            
+            await message.edit(embed=final_embed)
+            
+            # Если были ошибки, показываем детали
+            if failed_count > 0:
+                error_details = ""
+                for result in results:
+                    if not result['success']:
+                        error_details += f"• {result['member'].mention}: {result.get('error', 'Неизвестная ошибка')}\n"
+                
+                if error_details:
+                    error_embed = discord.Embed(
+                        title="⚠️ Детали ошибок",
+                        description=error_details[:1000],  # Ограничение Discord
+                        color=COLORS['error']
+                    )
+                    await ctx.send(embed=error_embed)
+    
+    except Exception as e:
+        logger.error(f"Ошибка в add_points: {e}")
         embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Количество поинтов должно быть положительным!",
+            title="❌ Критическая ошибка",
+            description=f"Произошла ошибка: {str(e)}",
             color=COLORS['error']
         )
         await ctx.send(embed=embed)
-        return
-    
-    new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
-    
-    embed = discord.Embed(
-        title="✅ Поинты выданы!",
-        color=COLORS['success']
-    )
-    embed.add_field(name="Получатель", value=member.mention, inline=True)
-    embed.add_field(name="Добавлено", value=f"{amount} поинтов", inline=True)
-    embed.add_field(name="Новый баланс", value=f"{new_total} поинтов", inline=True)
-    embed.add_field(name="Причина", value=reason, inline=False)
-    embed.add_field(name="Выдал", value=ctx.author.mention, inline=True)
-    embed.set_footer(text=f"ID: {member.id}")
-    
-    await ctx.send(embed=embed)
     
     # Проверяем и выдаем роли
     await check_and_assign_roles(member)
