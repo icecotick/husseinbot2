@@ -115,7 +115,7 @@ def is_admin():
     return commands.check(predicate)
 
 async def check_and_assign_roles(member: discord.Member):
-    """Проверка и выдача ролей на основе поинтов"""
+    """Проверка и выдача ролей на основе поинтов с уведомлениями в raid-points"""
     try:
         guild_id = member.guild.id
         user_id = member.id
@@ -143,9 +143,12 @@ async def check_and_assign_roles(member: discord.Member):
         
         role_name = highest_role['name']
         
-        # Находим или создаем роль на сервере
+        # Проверяем, есть ли уже эта роль
         discord_role = discord.utils.get(member.guild.roles, name=role_name)
+        if discord_role and discord_role in member.roles:
+            return  # Уже есть эта роль
         
+        # Находим или создаем роль на сервере
         if not discord_role:
             # Создаем новую роль
             try:
@@ -165,6 +168,16 @@ async def check_and_assign_roles(member: discord.Member):
                 logger.error(f'Ошибка создания роли: {e}')
                 return
         
+        # Получаем старую роль пользователя (если есть)
+        old_role_name = None
+        old_role_points = 0
+        for points_required, role_info in sorted_roles:
+            old_role = discord.utils.get(member.guild.roles, name=role_info['name'])
+            if old_role and old_role in member.roles:
+                old_role_name = role_info['name']
+                old_role_points = points_required
+                break
+        
         # Удаляем старые роли за поинты (только более низкие)
         for points_required, role_info in sorted_roles:
             if role_info['name'] != role_name:
@@ -180,6 +193,10 @@ async def check_and_assign_roles(member: discord.Member):
             try:
                 await member.add_roles(discord_role)
                 logger.info(f'Выдана роль {role_name} пользователю {member.display_name} ({points} поинтов)')
+                
+                # Отправляем уведомление о новой роли в raid-points
+                await send_role_notification_to_raid_channel(member, role_name, points, old_role_name)
+                
             except discord.Forbidden:
                 logger.error(f'Недостаточно прав для выдачи роли {role_name}')
             except Exception as e:
@@ -187,6 +204,170 @@ async def check_and_assign_roles(member: discord.Member):
                 
     except Exception as e:
         logger.error(f'Ошибка в check_and_assign_roles: {e}')
+
+async def send_role_notification_to_raid_channel(member: discord.Member, new_role: str, points: int, old_role: str = None):
+    """Отправка уведомления о получении новой роли в канал raid-points"""
+    try:
+        # Ищем канал raid-points
+        raid_channel = await get_raid_points_channel(member.guild)
+        
+        if not raid_channel:
+            logger.warning(f"Канал 'raid-points' не найден на сервере {member.guild.name}")
+            # Пробуем отправить в ЛС
+            await send_dm_notification(member, new_role, points, old_role)
+            return
+        
+        # Проверяем права на отправку в канал
+        if not raid_channel.permissions_for(member.guild.me).send_messages:
+            logger.warning(f"Нет прав на отправку в канал {raid_channel.name}")
+            await send_dm_notification(member, new_role, points, old_role)
+            return
+        
+        # Создаем embed для уведомления
+        embed = create_role_notification_embed(member, new_role, points, old_role)
+        
+        # Отправляем уведомление с упоминанием пользователя
+        message_content = f"🎉 {member.mention}, поздравляем с новой ролью!"
+        
+        message = await raid_channel.send(
+            content=message_content,
+            embed=embed
+        )
+        
+        # Добавляем праздничные реакции
+        await add_celebration_reactions(message)
+        
+        logger.info(f"Уведомление о роли отправлено в канал {raid_channel.name}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления о роли: {e}")
+        # Пробуем отправить в ЛС если не удалось в канал
+        try:
+            await send_dm_notification(member, new_role, points, old_role)
+        except:
+            pass
+
+async def get_raid_points_channel(guild: discord.Guild):
+    """Поиск канала raid-points на сервере"""
+    # Ищем по точному названию
+    raid_channel = discord.utils.get(guild.text_channels, name="raid-points")
+    
+    # Если не нашли, ищем по похожим названиям
+    if not raid_channel:
+        similar_names = ['raidpoints', 'raid-points', 'raid_points', 'raid', 'points', 'рейд-поинты']
+        for channel in guild.text_channels:
+            if any(name in channel.name.lower() for name in similar_names):
+                raid_channel = channel
+                break
+    
+    return raid_channel
+
+async def add_celebration_reactions(message):
+    """Добавляет праздничные реакции к сообщению"""
+    reactions = ["🎉", "🏆", "⭐", "👑", "🔥", "💪", "🚀"]
+    
+    for reaction in reactions[:3]:  # Добавляем только первые 3 реакции
+        try:
+            await message.add_reaction(reaction)
+        except:
+            pass
+
+async def send_dm_notification(member: discord.Member, new_role: str, points: int, old_role: str = None):
+    """Отправка уведомления в личные сообщения (резервный вариант)"""
+    try:
+        embed = create_role_notification_embed(member, new_role, points, old_role)
+        
+        # Пытаемся отправить в ЛС
+        await member.send(
+            f"🎉 Поздравляем, {member.name}! Вы получили новую роль на сервере **{member.guild.name}**!\n"
+            f"*Уведомление должно было отправиться в канал #raid-points, но он не найден или нет прав*",
+            embed=embed
+        )
+        
+        logger.info(f"Уведомление о роли отправлено в ЛС пользователю {member.name}")
+        
+    except discord.Forbidden:
+        logger.warning(f"Не удалось отправить ЛС пользователю {member.name} (запрещено)")
+    except Exception as e:
+        logger.error(f"Ошибка отправки ЛС: {e}")
+
+def create_role_notification_embed(member: discord.Member, new_role: str, points: int, old_role: str = None):
+    """Создание embed для уведомления о роли"""
+    
+    # Определяем цвет в зависимости от роли
+    role_colors = {
+        'raider newgen': discord.Color.green(),
+        'raider scout': discord.Color.blue(),
+        'raider striker': discord.Color.orange(),
+        'raider legend': discord.Color.purple(),
+        'raider commander': discord.Color.gold()
+    }
+    
+    color = role_colors.get(new_role.lower(), discord.Color.blurple())
+    
+    # Создаем embed
+    embed = discord.Embed(
+        title="🎉 НОВАЯ РОЛЬ!",
+        description=f"**{member.display_name}** получил(а) новую роль!",
+        color=color,
+        timestamp=discord.utils.utcnow()
+    )
+    
+    # Аватар пользователя
+    embed.set_thumbnail(url=member.display_avatar.url)
+    
+    # Информация о ролях
+    role_info = f"**🎖️ Новая роль:** `{new_role}`\n"
+    if old_role:
+        role_info += f"**📈 Предыдущая роль:** `{old_role}`\n"
+    role_info += f"**🏆 Текущие поинты:** `{points}`"
+    
+    embed.add_field(name="Роли и поинты", value=role_info, inline=False)
+    
+    # Поздравление в зависимости от роли
+    congratulations = {
+        'raider newgen': "Добро пожаловать в ряды рейдеров! Начинается твое путешествие! 🚀",
+        'raider scout': "Отличная работа! Ты становишься опытным скаутом! 🔍",
+        'raider striker': "Впечатляюще! Ты теперь ударная сила нашего отряда! 💥",
+        'raider legend': "Легендарно! Твои достижения войдут в историю! 📜",
+        'raider commander': "Величайший из великих! Ты ведешь за собой весь отряд! 👑"
+    }
+    
+    congrats_text = congratulations.get(new_role.lower(), 
+        f"Поздравляем с получением роли **{new_role}**! Продолжай в том же духе! ✨")
+    
+    embed.add_field(name="🎊 Поздравления!", value=congrats_text, inline=False)
+    
+    # Следующая цель
+    next_role_info = get_next_role_info(new_role)
+    if next_role_info:
+        embed.add_field(name="🎯 Следующая цель", value=next_role_info, inline=False)
+    
+    # Футер
+    embed.set_footer(
+        text=f"ID: {member.id} • Автоматическая выдача",
+        icon_url=member.guild.icon.url if member.guild.icon else None
+    )
+    
+    return embed
+
+def get_next_role_info(current_role: str):
+    """Получение информации о следующей роли"""
+    role_hierarchy = {
+        'raider newgen': {'next': 'raider scout', 'points': 100},
+        'raider scout': {'next': 'raider striker', 'points': 150},
+        'raider striker': {'next': 'raider legend', 'points': 350},
+        'raider legend': {'next': 'raider commander', 'points': 500},
+        'raider commander': {'next': None, 'points': None}
+    }
+    
+    info = role_hierarchy.get(current_role.lower())
+    if info and info['next']:
+        return f"**Следующая роль:** `{info['next']}` (нужно {info['points']} поинтов)"
+    elif current_role.lower() == 'raider commander':
+        return "🎖️ **Достигнута максимальная роль!** Ты на вершине! 🏔️"
+    
+    return None
 
 # ========== ТАСКИ ДЛЯ 24/7 РАБОТЫ ==========
 
