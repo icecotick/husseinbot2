@@ -425,6 +425,239 @@ async def on_ready():
         logger.error(f'❌ Ошибка синхронизации команд: {e}')
 
 # ========== КОМАНДЫ ДЛЯ АДМИНОВ ==========
+@bot.hybrid_command(
+    name='setnotificationchannel',
+    description='Установить канал для уведомлений о ролях'
+)
+@is_admin()
+async def set_notification_channel(
+    ctx,
+    channel: Optional[discord.TextChannel] = None
+):
+    """Установить канал для уведомлений о ролях"""
+    try:
+        if channel is None:
+            # Если канал не указан, устанавливаем текущий
+            channel = ctx.channel
+        
+        # Здесь можно сохранить настройку в базе данных
+        # Пока просто показываем сообщение
+        
+        embed = discord.Embed(
+            title="✅ Канал уведомлений установлен",
+            description=f"Уведомления о получении ролей будут отправляться в {channel.mention}",
+            color=COLORS['success']
+        )
+        
+        # Проверяем доступность канала
+        if not channel.permissions_for(ctx.guild.me).send_messages:
+            embed.add_field(
+                name="⚠️ Внимание",
+                value="У бота нет прав на отправку сообщений в этот канал!",
+                inline=False
+            )
+        
+        embed.add_field(
+            name="Текущие настройки",
+            value=f"• Канал: {channel.mention}\n"
+                  f"• Название: `{channel.name}`\n"
+                  f"• ID: `{channel.id}`",
+            inline=False
+        )
+        
+        embed.set_footer(text="Уведомления отправляются автоматически при получении новой роли")
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в set_notification_channel: {e}")
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Произошла ошибка: {str(e)}",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+
+@bot.hybrid_command(
+    name='testnotification',
+    description='Тестовая отправка уведомления в raid-points'
+)
+@is_admin()
+async def test_notification(ctx, member: Optional[discord.Member] = None):
+    """Тестовая отправка уведомления"""
+    try:
+        if member is None:
+            member = ctx.author
+        
+        # Ищем канал raid-points
+        raid_channel = await get_raid_points_channel(ctx.guild)
+        
+        if not raid_channel:
+            embed = discord.Embed(
+                title="❌ Канал не найден",
+                description="Канал 'raid-points' не найден на сервере.",
+                color=COLORS['error']
+            )
+            embed.add_field(
+                name="Рекомендации",
+                value="1. Создайте текстовый канал с именем `raid-points`\n"
+                      "2. Убедитесь, что у бота есть права на отправку сообщений\n"
+                      "3. Используйте команду `/setnotificationchannel` для настройки",
+                inline=False
+            )
+            await ctx.send(embed=embed)
+            return
+        
+        # Проверяем права
+        if not raid_channel.permissions_for(ctx.guild.me).send_messages:
+            embed = discord.Embed(
+                title="❌ Нет прав",
+                description=f"У бота нет прав на отправку сообщений в {raid_channel.mention}",
+                color=COLORS['error']
+            )
+            await ctx.send(embed=embed)
+            return
+        
+        # Создаем тестовое уведомление
+        embed = create_role_notification_embed(
+            member=member,
+            new_role="raider commander",  # Тестовая роль
+            points=999,
+            old_role="raider legend"
+        )
+        
+        # Отправляем тест
+        test_message = await raid_channel.send(
+            f"🔧 **ТЕСТОВОЕ УВЕДОМЛЕНИЕ**\n"
+            f"{member.mention}, это тест отправки уведомлений!",
+            embed=embed
+        )
+        
+        # Добавляем реакции
+        await add_celebration_reactions(test_message)
+        
+        # Отчет об успехе
+        success_embed = discord.Embed(
+            title="✅ Тест успешен!",
+            description=f"Тестовое уведомление отправлено в {raid_channel.mention}",
+            color=COLORS['success']
+        )
+        success_embed.add_field(
+            name="Детали теста",
+            value=f"• Пользователь: {member.mention}\n"
+                  f"• Канал: {raid_channel.mention}\n"
+                  f"• Сообщение: [Перейти]({test_message.jump_url})",
+            inline=False
+        )
+        
+        await ctx.send(embed=success_embed)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в test_notification: {e}")
+        embed = discord.Embed(
+            title="❌ Ошибка теста",
+            description=f"Произошла ошибка: {str(e)}",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+
+@bot.hybrid_command(
+    name='checkraidchannel',
+    description='Проверить канал raid-points'
+)
+async def check_raid_channel(ctx):
+    """Проверить наличие и доступность канала raid-points"""
+    try:
+        # Ищем канал
+        raid_channel = await get_raid_points_channel(ctx.guild)
+        
+        embed = discord.Embed(
+            title="🔍 Проверка канала raid-points",
+            color=COLORS['info']
+        )
+        
+        if raid_channel:
+            embed.description = f"Канал найден: {raid_channel.mention}"
+            
+            # Проверяем права
+            perms = raid_channel.permissions_for(ctx.guild.me)
+            
+            status = []
+            if perms.send_messages:
+                status.append("✅ Отправка сообщений")
+            else:
+                status.append("❌ Нет прав на отправку сообщений")
+            
+            if perms.embed_links:
+                status.append("✅ Встраиваемые ссылки (embeds)")
+            else:
+                status.append("❌ Нет прав на embeds")
+            
+            if perms.add_reactions:
+                status.append("✅ Добавление реакций")
+            else:
+                status.append("❌ Нет прав на реакции")
+            
+            if perms.mention_everyone:
+                status.append("✅ Упоминания")
+            else:
+                status.append("⚠️ Нет прав на @everyone")
+            
+            embed.add_field(
+                name="📊 Статус прав",
+                value="\n".join(status),
+                inline=False
+            )
+            
+            embed.add_field(
+                name="📝 Информация о канале",
+                value=f"• Название: `{raid_channel.name}`\n"
+                      f"• ID: `{raid_channel.id}`\n"
+                      f"• Позиция: {raid_channel.position}\n"
+                      f"• Создан: {raid_channel.created_at.strftime('%d.%m.%Y')}",
+                inline=False
+            )
+            
+            if all([perms.send_messages, perms.embed_links, perms.add_reactions]):
+                embed.add_field(
+                    name="🎉 Готов к работе!",
+                    value="Канал полностью готов к отправке уведомлений!",
+                    inline=False
+                )
+            else:
+                embed.add_field(
+                    name="⚠️ Требуются права",
+                    value="Необходимо выдать боту права:\n"
+                          "• Send Messages\n"
+                          "• Embed Links\n"
+                          "• Add Reactions",
+                    inline=False
+                )
+                
+        else:
+            embed.description = "Канал 'raid-points' не найден!"
+            embed.add_field(
+                name="🚀 Как создать?",
+                value="1. Создайте текстовый канал\n"
+                      "2. Назовите его `raid-points`\n"
+                      "3. Убедитесь, что у бота есть права:\n"
+                      "   • 📝 Отправка сообщений\n"
+                      "   • 🔗 Встраиваемые ссылки\n"
+                      "   • ⭐ Добавление реакций",
+                inline=False
+            )
+        
+        await ctx.send(embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в check_raid_channel: {e}")
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Произошла ошибка: {str(e)}",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+
 
 @bot.hybrid_command(
     name='addpoints',
