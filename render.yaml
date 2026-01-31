@@ -10,7 +10,7 @@ services:
       - key: DISCORD_TOKEN
         sync: false
       - key: BOT_PREFIX
-        value: "/"
+        value: "!"
       - key: ADMIN_ROLES
         value: "The Owner,Co-Owner"
       - key: DATABASE_URL
