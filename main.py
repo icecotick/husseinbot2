@@ -1371,7 +1371,7 @@ async def raid_unlock(
         )
         embed.add_field(
             name="Роль для разблокировки",
-            value=f"{role.mention} ({role.id})",
+            value=f"{role.mention} (ID: `{role.id}`)",
             inline=False
         )
         embed.set_footer(text="Восстанавливаю стандартные права")
@@ -1390,9 +1390,25 @@ async def raid_unlock(
                     channel = await ctx.guild.fetch_channel(channel_id)
                 
                 if channel:
-                    # Сбрасываем/восстанавливаем права для указанной роли
-                    # Удаляем кастомные права, чтобы вернуть стандартные
-                    await channel.set_permissions(role, overwrite=None)
+                    # ВАЖНО: Получаем текущие настройки канала
+                    current_overwrites = channel.overwrites
+                    
+                    # Создаем новые права - разрешаем отправку сообщений
+                    # Устанавливаем все основные права в None (наследование от категории/сервера)
+                    overwrite = discord.PermissionOverwrite()
+                    
+                    # Для текстовых каналов
+                    if isinstance(channel, discord.TextChannel):
+                        overwrite.send_messages = True  # Разрешаем отправку
+                        overwrite.add_reactions = True  # Разрешаем реакции
+                        overwrite.read_messages = None  # Наследуем (обычно True)
+                        overwrite.view_channel = None   # Наследуем
+                    
+                    # Применяем права
+                    await channel.set_permissions(role, overwrite=overwrite)
+                    
+                    # Альтернативный способ: удаляем настройку для этой роли
+                    # await channel.set_permissions(role, overwrite=None)
                     
                     results.append(f"✅ {channel.mention} - разблокирован для {role.mention}")
                     unlocked_channels.append(channel)
@@ -1438,24 +1454,145 @@ async def raid_unlock(
                 inline=False
             )
         
+        # Проверяем, действительно ли разблокировано
+        if unlocked_channels:
+            test_channel = unlocked_channels[0]
+            test_perms = test_channel.overwrites_for(role)
+            can_send = test_perms.send_messages
+            
+            if can_send is None or can_send == True:
+                status_text = f"✅ {role.mention} может писать в канале {test_channel.mention}"
+            else:
+                status_text = f"⚠️ Проверьте права вручную. {role.mention} все еще не может писать"
+            
+            final_embed.add_field(
+                name="🔍 Проверка прав",
+                value=status_text,
+                inline=False
+            )
+        
         final_embed.add_field(
             name="📢 Что изменилось?",
-            value=f"Роль {role.mention} теперь имеет стандартные права доступа к этим каналам",
+            value=f"Роль {role.mention} теперь имеет доступ к отправке сообщений в этих каналах",
             inline=False
         )
         
+        # Кнопка для проверки
+        view = discord.ui.View(timeout=60)
+        
+        async def refresh_callback(interaction):
+            if interaction.user != ctx.author:
+                await interaction.response.send_message("❌ Только автор команды может проверять!", ephemeral=True)
+                return
+            
+            # Проверяем права на первом канале
+            if unlocked_channels:
+                channel = unlocked_channels[0]
+                perms = channel.overwrites_for(role)
+                
+                check_embed = discord.Embed(
+                    title="🔍 Проверка прав",
+                    color=COLORS['info']
+                )
+                
+                perms_text = []
+                perms_text.append(f"**Канал:** {channel.mention}")
+                perms_text.append(f"**Роль:** {role.mention}")
+                perms_text.append(f"• Отправка сообщений: `{perms.send_messages}`")
+                perms_text.append(f"• Чтение канала: `{perms.read_messages}`")
+                perms_text.append(f"• Реакции: `{perms.add_reactions}`")
+                perms_text.append(f"• Просмотр канала: `{perms.view_channel}`")
+                
+                check_embed.description = "\n".join(perms_text)
+                
+                if perms.send_messages in (True, None):
+                    check_embed.add_field(name="✅ Статус", value="Канал разблокирован!", inline=True)
+                else:
+                    check_embed.add_field(name="❌ Статус", value="Канал все еще заблокирован", inline=True)
+                
+                await interaction.response.send_message(embed=check_embed, ephemeral=True)
+        
+        refresh_button = discord.ui.Button(
+            label="🔄 Проверить права", 
+            style=discord.ButtonStyle.secondary
+        )
+        refresh_button.callback = refresh_callback
+        view.add_item(refresh_button)
+        
         final_embed.set_footer(text=f"Команда выполнена: {ctx.author.display_name}")
         
-        await message.edit(embed=final_embed)
+        await message.edit(embed=final_embed, view=view)
         
     except Exception as e:
         logger.error(f"Ошибка в raid_unlock: {e}")
         embed = discord.Embed(
             title="❌ Ошибка разблокировки",
-            description=f"Произошла ошибка: {str(e)}",
+            description=f"Произошла ошибка: {str(e)}\n\n"
+                       f"**Возможные решения:**\n"
+                       f"1. Проверьте права бота (должны быть выше роли {role.mention})\n"
+                       f"2. Попробуйте разблокировать через веб-интерфейс Discord\n"
+                       f"3. Убедитесь, что ID каналов правильные",
             color=COLORS['error']
         )
         await ctx.send(embed=embed)
+
+# Также добавьте команду для полного сброса всех прав (если ничего не помогает):
+@bot.hybrid_command(
+    name='raidreset',
+    description='Полный сброс всех прав на рейдовых каналах'
+)
+@is_admin()
+async def raid_reset(ctx, role: discord.Role):
+    """Полный сброс всех прав для роли на рейдовых каналах"""
+    try:
+        embed = discord.Embed(
+            title="🔄 Полный сброс прав",
+            description=f"Сбрасываю ВСЕ права для роли {role.mention} на рейдовых каналах...",
+            color=COLORS['warning']
+        )
+        embed.add_field(
+            name="⚠️ Внимание",
+            value="Это действие полностью удалит все кастомные права для этой роли!\n"
+                  "После этого будут применены стандартные настройки сервера.",
+            inline=False
+        )
+        
+        message = await ctx.send(embed=embed)
+        
+        results = []
+        
+        for channel_id in RAID_CHANNEL_IDS:
+            try:
+                channel = ctx.guild.get_channel(channel_id)
+                if not channel:
+                    channel = await ctx.guild.fetch_channel(channel_id)
+                
+                if channel:
+                    # Полностью удаляем кастомные права для роли
+                    await channel.set_permissions(role, overwrite=None)
+                    results.append(f"✅ {channel.mention} - права сброшены")
+                    
+            except Exception as e:
+                results.append(f"❌ {channel_id}: {str(e)}")
+        
+        final_embed = discord.Embed(
+            title="✅ Сброс прав завершен",
+            description=f"Все кастомные права для {role.mention} удалены.",
+            color=COLORS['success']
+        )
+        
+        final_embed.add_field(
+            name="Результаты",
+            value="\n".join(results[:10]),  # Ограничиваем количество
+            inline=False
+        )
+        
+        await message.edit(embed=final_embed)
+        
+    except Exception as e:
+        logger.error(f"Ошибка в raid_reset: {e}")
+        await ctx.send(f"❌ Ошибка: {str(e)}")
+
 
 @bot.hybrid_command(
     name='raidblockall',
