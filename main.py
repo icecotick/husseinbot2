@@ -63,49 +63,6 @@ RAID_CHANNEL_IDS = [
     1441862087851905177   # https://discord.com/channels/1431584140511154229/1441862087851905177
 ]
 
-# ========== ВЕБ-СЕРВЕР ДЛЯ ПИНГА ==========
-
-async def handle_ping(request):
-    """Обработчик пинга"""
-    logger.info("🏓 Получен пинг от мониторинга")
-    return web.Response(text="Bot is alive! 🟢\nServers: " + str(len(bot.guilds)))
-
-async def handle_health(request):
-    """Обработчик health check"""
-    return web.json_response({
-        "status": "ok",
-        "bot": str(bot.user),
-        "servers": len(bot.guilds),
-        "uptime": str(datetime.now())
-    })
-
-async def start_web_server():
-    """Запуск веб-сервера для пинга"""
-    try:
-        app = web.Application()
-        
-        # Добавляем маршруты
-        app.router.add_get('/', handle_ping)
-        app.router.add_get('/ping', handle_ping)
-        app.router.add_get('/health', handle_health)
-        
-        # Запускаем сервер
-        runner = web.AppRunner(app)
-        await runner.setup()
-        
-        # Используем порт из переменных окружения
-        site = web.TCPSite(runner, '0.0.0.0', PORT)
-        await site.start()
-        
-        logger.info(f"🌐 Веб-сервер запущен на порту {PORT}")
-        logger.info(f"📡 Доступные эндпоинты:")
-        logger.info(f"   http://0.0.0.0:{PORT}/")
-        logger.info(f"   http://0.0.0.0:{PORT}/ping")
-        logger.info(f"   http://0.0.0.0:{PORT}/health")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка запуска веб-сервера: {e}")
-
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С РОЛЯМИ ==========
 
 def is_admin():
