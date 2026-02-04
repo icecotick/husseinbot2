@@ -1669,52 +1669,77 @@ async def help_command(ctx):
 
 @bot.event
 async def on_command_error(ctx, error):
-    """Обработка ошибок команд"""
-    if isinstance(error, commands.CheckFailure):
+    """Обработка ошибок команд с rate limiting"""
+    if isinstance(error, commands.CommandOnCooldown):
+        embed = discord.Embed(
+            title="⏳ Слишком много запросов",
+            description=f"Пожалуйста, подождите {error.retry_after:.1f} секунд",
+            color=discord.Color.orange()
+        )
+        await ctx.send(embed=embed, delete_after=5)
+    
+    elif isinstance(error, commands.CheckFailure):
         embed = discord.Embed(
             title="❌ Недостаточно прав",
-            description=f"Только **{', '.join(ADMIN_ROLES)}** могут использовать эту команду!",
-            color=COLORS['error']
+            description=f"Только админы могут использовать эту команду!",
+            color=discord.Color.red()
         )
         await ctx.send(embed=embed)
-    elif isinstance(error, commands.MissingRequiredArgument):
+    
+    elif isinstance(error, discord.HTTPException) and error.status == 429:
+        # Обработка ошибки 429
+        retry_after = getattr(error, 'retry_after', 5)
+        logger.warning(f"Rate limited! Waiting {retry_after} seconds")
+        
         embed = discord.Embed(
-            title="❌ Не хватает аргументов",
-            description=f"Используйте `{PREFIX}help` для справки по командам",
-            color=COLORS['error']
+            title="⏳ Discord ограничил запросы",
+            description=f"Подождите {retry_after} секунд и попробуйте снова",
+            color=discord.Color.orange()
         )
-        await ctx.send(embed=embed)
-    elif isinstance(error, commands.BadArgument):
-        embed = discord.Embed(
-            title="❌ Неправильные аргументы",
-            description="Проверьте правильность введенных данных",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-    elif isinstance(error, commands.CommandNotFound):
-        pass  # Игнорируем
+        await ctx.send(embed=embed, delete_after=retry_after)
+        
+        # Ждем перед повторной попыткой
+        await asyncio.sleep(retry_after + 1)
+    
     else:
-        logger.error(f"Необработанная ошибка команды: {error}")
-        embed = discord.Embed(
-            title="❌ Неизвестная ошибка",
-            description="Произошла неизвестная ошибка.",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
+        logger.error(f"Необработанная ошибка: {error}")
+        
+        # Проверяем, не является ли ошибка 429
+        error_str = str(error)
+        if "429" in error_str or "Too Many Requests" in error_str:
+            embed = discord.Embed(
+                title="⚠️ Discord API перегружен",
+                description="Попробуйте через 5-10 секунд",
+                color=discord.Color.orange()
+            )
+            await ctx.send(embed=embed)
+        else:
+            embed = discord.Embed(
+                title="❌ Неизвестная ошибка",
+                description=str(error)[:100],
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+
 
 # ========== ЗАПУСК БОТА ==========
 
 if __name__ == "__main__":
-    logger.info("🚀 Запуск Discord Points Bot с PostgreSQL")
-    logger.info(f"🤖 Префикс команд: {PREFIX}")
-    logger.info(f"👑 Админские роли: {ADMIN_ROLES}")
-    logger.info(f"🌐 Порт веб-сервера: {PORT}")
-    logger.info("🗄️  Используется база данных PostgreSQL")
-    logger.info("🔄 Бот будет работать 24/7 с веб-сервером для пинга")
+    logger.info("🚀 Запуск Discord бота с защитой от rate limiting")
+    logger.info("⏱️  Добавлены задержки между запросами")
+    
+    # Устанавливаем cooldown для всех команд
+    for command in bot.commands:
+        command.cooldown = commands.CooldownMapping.from_cooldown(1, 2.0, commands.BucketType.user)
     
     try:
-        bot.run(TOKEN)
-    except discord.LoginFailure:
-        logger.error("❌ Ошибка авторизации! Проверьте токен бота.")
+        # Запускаем бота с обработкой ошибок
+        bot.run(TOKEN, reconnect=True)
+    except discord.errors.HTTPException as e:
+        if e.status == 429:
+            logger.error("❌ Серьезное ограничение запросов! Подождите несколько минут.")
+            logger.error("ℹ️ Discord временно заблокировал ваш IP")
+        else:
+            logger.error(f"❌ HTTP ошибка: {e}")
     except Exception as e:
         logger.error(f"❌ Критическая ошибка: {e}")
