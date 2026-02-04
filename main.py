@@ -25,8 +25,8 @@ load_dotenv()
 # Настройки бота
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = os.getenv('BOT_PREFIX', '!')
-ADMIN_ROLES = [role.strip() for role in os.getenv('ADMIN_ROLES', 'The Owner,Co-Owner,Administrator,Right wing').split(',')]
-PORT = int(os.getenv('PORT', '10000'))  #  ПОРТ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
+ADMIN_ROLES = [role.strip() forrolee in os.getenv('ADMIN_ROLES', 'The Owner,Co-Owner,Administrator,Right wing').split(',')]
+PORT = int(os.getenv('PORT', '9999'))  #  ПОРТ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ
 
 # Проверка наличия токена
 if not TOKEN:
