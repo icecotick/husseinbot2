@@ -1215,15 +1215,22 @@ async def ping_command(ctx):
 
 @bot.hybrid_command(
     name='raidblock',
-    description='Заблокировать каналы для всех пользователей'
+    description='Заблокировать рейдовые каналы для указанной роли'
 )
 @is_admin()
-async def raid_block(ctx):
-    """Блокировка каналов - доступ только для админов"""
+async def raid_block(
+    ctx, 
+    role: Optional[discord.Role] = None
+):
+    """Блокировка рейдовых каналов для указанной роли (по умолчанию @everyone)"""
     try:
+        # Если роль не указана, используем @everyone
+        if role is None:
+            role = ctx.guild.default_role
+        
         embed = discord.Embed(
-            title="🔒 Блокировка каналов",
-            description="Начинаю блокировку каналов...",
+            title="🔒 Блокировка рейдовых каналов",
+            description=f"Начинаю блокировку каналов для роли {role.mention}...",
             color=COLORS['warning']
         )
         embed.add_field(
@@ -1234,12 +1241,14 @@ async def raid_block(ctx):
                   f"• <#{RAID_CHANNEL_IDS[3]}>",
             inline=False
         )
-        embed.set_footer(text="Доступ останется только у админов")
+        embed.add_field(
+            name="Роль для блокировки",
+            value=f"{role.mention} ({role.id})",
+            inline=False
+        )
+        embed.set_footer(text="Админы сохранят доступ ко всем каналам")
         
         message = await ctx.send(embed=embed)
-        
-        # Получаем роль @everyone
-        everyone_role = ctx.guild.default_role
         
         # Список результатов
         results = []
@@ -1253,18 +1262,15 @@ async def raid_block(ctx):
                     channel = await ctx.guild.fetch_channel(channel_id)
                 
                 if channel:
-                    # Сохраняем текущие права для роли @everyone
-                    current_perms = channel.overwrites_for(everyone_role)
-                    
                     # Создаем новые права - запрещаем отправку сообщений
                     overwrite = discord.PermissionOverwrite()
                     overwrite.send_messages = False
                     overwrite.add_reactions = False
                     
-                    # Применяем права
-                    await channel.set_permissions(everyone_role, overwrite=overwrite)
+                    # Применяем права для указанной роли
+                    await channel.set_permissions(role, overwrite=overwrite)
                     
-                    results.append(f"✅ {channel.mention} - заблокирован")
+                    results.append(f"✅ {channel.mention} - заблокирован для {role.mention}")
                     blocked_channels.append(channel)
                     
                 else:
@@ -1294,28 +1300,31 @@ async def raid_block(ctx):
             inline=False
         )
         
+        final_embed.add_field(
+            name="🎯 Заблокировано для",
+            value=f"{role.mention} (ID: `{role.id}`)",
+            inline=True
+        )
+        
         # Детали
-        if len(results) <= 10:
+        if len(results) <= 8:
             final_embed.add_field(
                 name="📝 Детали",
                 value="\n".join(results),
                 inline=False
             )
         
-        # Инструкция для админов
-        admin_roles = [discord.utils.get(ctx.guild.roles, name=role_name) for role_name in ADMIN_ROLES]
-        admin_mentions = [role.mention for role in admin_roles if role]
-        
-        if admin_mentions:
-            final_embed.add_field(
-                name="👑 Доступ остался у",
-                value="\n".join(admin_mentions),
-                inline=True
-            )
+        # Информация о доступе
+        final_embed.add_field(
+            name="ℹ️ Кто сохранил доступ?",
+            value="• Владельцы сервера\n"
+                  f"• Роли: {', '.join(ADMIN_ROLES)}",
+            inline=False
+        )
         
         final_embed.add_field(
             name="🔓 Для разблокировки",
-            value=f"Используйте `{PREFIX}raidunlock`",
+            value=f"Используйте `{PREFIX}raidunlock` или `{PREFIX}raidunlock {role.mention}`",
             inline=True
         )
         
@@ -1334,15 +1343,22 @@ async def raid_block(ctx):
 
 @bot.hybrid_command(
     name='raidunlock',
-    description='Разблокировать каналы для всех пользователей'
+    description='Разблокировать рейдовые каналы для указанной роли'
 )
 @is_admin()
-async def raid_unlock(ctx):
-    """Разблокировка рейдовых каналов"""
+async def raid_unlock(
+    ctx, 
+    role: Optional[discord.Role] = None
+):
+    """Разблокировка рейдовых каналов для указанной роли"""
     try:
+        # Если роль не указана, используем @everyone
+        if role is None:
+            role = ctx.guild.default_role
+        
         embed = discord.Embed(
-            title="🔓 Разблокировка каналов",
-            description="Начинаю разблокировку каналов...",
+            title="🔓 Разблокировка рейдовых каналов",
+            description=f"Начинаю разблокировку каналов для роли {role.mention}...",
             color=COLORS['info']
         )
         embed.add_field(
@@ -1353,12 +1369,14 @@ async def raid_unlock(ctx):
                   f"• <#{RAID_CHANNEL_IDS[3]}>",
             inline=False
         )
-        embed.set_footer(text="Доступ будет восстановлен для всех")
+        embed.add_field(
+            name="Роль для разблокировки",
+            value=f"{role.mention} ({role.id})",
+            inline=False
+        )
+        embed.set_footer(text="Восстанавливаю стандартные права")
         
         message = await ctx.send(embed=embed)
-        
-        # Получаем роль @everyone
-        everyone_role = ctx.guild.default_role
         
         # Список результатов
         results = []
@@ -1372,16 +1390,11 @@ async def raid_unlock(ctx):
                     channel = await ctx.guild.fetch_channel(channel_id)
                 
                 if channel:
-                    # Сбрасываем права для роли @everyone (разрешаем отправку)
-                    overwrite = discord.PermissionOverwrite()
-                    overwrite.send_messages = True
-                    overwrite.add_reactions = True
-                    overwrite.read_messages = True
+                    # Сбрасываем/восстанавливаем права для указанной роли
+                    # Удаляем кастомные права, чтобы вернуть стандартные
+                    await channel.set_permissions(role, overwrite=None)
                     
-                    # Применяем права
-                    await channel.set_permissions(everyone_role, overwrite=overwrite)
-                    
-                    results.append(f"✅ {channel.mention} - разблокирован")
+                    results.append(f"✅ {channel.mention} - разблокирован для {role.mention}")
                     unlocked_channels.append(channel)
                     
                 else:
@@ -1411,8 +1424,14 @@ async def raid_unlock(ctx):
             inline=False
         )
         
+        final_embed.add_field(
+            name="🎯 Разблокировано для",
+            value=f"{role.mention} (ID: `{role.id}`)",
+            inline=True
+        )
+        
         # Детали
-        if len(results) <= 10:
+        if len(results) <= 8:
             final_embed.add_field(
                 name="📝 Детали",
                 value="\n".join(results),
@@ -1420,8 +1439,8 @@ async def raid_unlock(ctx):
             )
         
         final_embed.add_field(
-            name="📢 Каналы снова доступны",
-            value="Теперь все участники могут писать в каналах",
+            name="📢 Что изменилось?",
+            value=f"Роль {role.mention} теперь имеет стандартные права доступа к этим каналам",
             inline=False
         )
         
@@ -1437,6 +1456,24 @@ async def raid_unlock(ctx):
             color=COLORS['error']
         )
         await ctx.send(embed=embed)
+
+@bot.hybrid_command(
+    name='raidblockall',
+    description='Быстрая блокировка всех рейдовых каналов для @everyone'
+)
+@is_admin()
+async def raid_block_all(ctx):
+    """Быстрая блокировка для @everyone (старая версия команды)"""
+    await raid_block(ctx, ctx.guild.default_role)
+
+@bot.hybrid_command(
+    name='raidunlockall',
+    description='Быстрая разблокировка всех рейдовых каналов для @everyone'
+)
+@is_admin()
+async def raid_unlock_all(ctx):
+    """Быстрая разблокировка для @everyone (старая версия команды)"""
+    await raid_unlock(ctx, ctx.guild.default_role)
 
 
 @bot.hybrid_command(name='help', description='Показать все команды')
