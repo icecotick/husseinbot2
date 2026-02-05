@@ -1644,7 +1644,7 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
         embed = discord.Embed(
             title="❌ Недостаточно прав",
-            description=f"Только **{', '.join(ADMIN_ROLES)}** могут использовать эту команду!",
+            description=f"Только **{', '.join(ADMIN_ROLE_IDS)}** могут использовать эту команду!",
             color=COLORS['error']
         )
         await ctx.send(embed=embed)
