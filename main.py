@@ -1624,9 +1624,12 @@ async def help_command(ctx):
         )
     
     # Информация о системе
+    # Исправляем ошибку - преобразуем ID в строки
+    admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS)
+    
     embed.add_field(
         name="ℹ️ Информация о боте",
-        value=f"• Админские роли: {', '.join(ADMIN_ROLE_IDS)}\n"
+        value=f"• Админские ID ролей: {admin_role_ids_str}\n"
               f"• База данных: PostgreSQL\n"
               f"• Хостинг: Render.com\n"
               f"• Порт: {PORT}\n"
@@ -1635,6 +1638,7 @@ async def help_command(ctx):
     )
     
     await ctx.send(embed=embed)
+
 
 # ========== ОБРАБОТКА ОШИБОК ==========
 
