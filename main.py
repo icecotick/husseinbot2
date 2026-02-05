@@ -686,6 +686,10 @@ async def unlock_all_channels_in_list(guild: discord.Guild, role: discord.Role =
 async def on_ready():
     """Событие при запуске бота"""
     logger.info(f'✅ Бот {bot.user} запущен!')
+    
+    # Ожидаем полную загрузку
+    await bot.wait_until_ready()
+    
     logger.info(f'📊 Серверов: {len(bot.guilds)}')
     logger.info(f'🌐 Порт веб-сервера: {PORT}')
     
@@ -694,7 +698,7 @@ async def on_ready():
         logger.error("❌ Не удалось подключиться к базе данных!")
     
     # Запускаем веб-сервер
-    await start_web_server()
+    asyncio.create_task(start_web_server())
     
     # Устанавливаем статус
     await bot.change_presence(
@@ -704,8 +708,9 @@ async def on_ready():
         )
     )
     
-    # Синхронизация slash команд
+    # Синхронизация slash команд с задержкой
     try:
+        await asyncio.sleep(5)  # Ждем 5 секунд
         synced = await bot.tree.sync()
         logger.info(f'✅ Синхронизировано {len(synced)} команд')
     except Exception as e:
