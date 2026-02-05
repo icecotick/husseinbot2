@@ -1642,9 +1642,12 @@ async def help_command(ctx):
 async def on_command_error(ctx, error):
     """Обработка ошибок команд"""
     if isinstance(error, commands.CheckFailure):
+        # Преобразуем ID ролей в строки для отображения
+        admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS)
+        
         embed = discord.Embed(
             title="❌ Недостаточно прав",
-            description=f"Только **{', '.join(ADMIN_ROLE_IDS)}** могут использовать эту команду!",
+            description=f"Только роли с ID: **{admin_role_ids_str}** могут использовать эту команду!",
             color=COLORS['error']
         )
         await ctx.send(embed=embed)
