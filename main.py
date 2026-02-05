@@ -1678,7 +1678,7 @@ async def on_command_error(ctx, error):
 if __name__ == "__main__":
     logger.info("🚀 Запуск Discord Points Bot")
     logger.info(f"🤖 Префикс команд: {PREFIX}")
-    logger.info(f"👑 Админские роли: {ADMIN_ROLES_ID}")
+    logger.info(f"👑 Админские роли: {ADMIN_ROLE_ID}")
     logger.info(f"🌐 Порт веб-сервера: {PORT}")
     logger.info("🗄️  Используется база данных PostgreSQL")
     logger.info("🔄 Бот будет работать 24/7 с веб-сервером для пинга")
