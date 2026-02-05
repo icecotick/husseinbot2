@@ -23,7 +23,7 @@ load_dotenv()
 # Настройки бота
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = os.getenv('BOT_PREFIX', '!')
-ADMIN_ROLES = os.getenv('ADMIN_ROLES', 'The Owner,  Co-Owner,  Administrator,  Right wing,  events hoster').split(',')
+ADMIN_ROLE_IDS = [int(role_id.strip()) for role_id in os.getenv('ADMIN_ROLE_IDS', '').split(',') if role_id.strip()]
 DATABASE_URL = os.getenv('DATABASE_URL')
 
 # Автоматическое определение порта для Render
