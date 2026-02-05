@@ -439,8 +439,8 @@ def is_admin():
             return True
         
         # Проверка кастомных админских ролей
-        author_roles = [role.name for role in ctx.author.roles]
-        return any(admin_role in author_roles for admin_role in ADMIN_ROLES)
+        author_role_ids = [role.id for role in ctx.author.roles]
+        return any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS)
     
     return commands.check(predicate)
 
