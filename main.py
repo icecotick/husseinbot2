@@ -7,6 +7,8 @@ from typing import Optional, List
 from dotenv import load_dotenv
 import asyncpg
 import asyncio
+from aiohttp import web
+import socket
 
 # Настройка логирования
 logging.basicConfig(
@@ -21,8 +23,11 @@ load_dotenv()
 # Настройки бота
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = os.getenv('BOT_PREFIX', '!')
-ADMIN_ROLES = os.getenv('ADMIN_ROLES', 'The Owner,Co-Owner,Adiministrator,Right wing').split(',')
+ADMIN_ROLES = os.getenv('ADMIN_ROLES', 'Admin,Moderator').split(',')
 DATABASE_URL = os.getenv('DATABASE_URL')
+
+# Автоматическое определение порта для Render
+PORT = int(os.getenv('PORT', '10000'))
 
 # Проверка наличия токена
 if not TOKEN:
@@ -70,7 +75,62 @@ ROLE_COLORS = {
     'raider commander': discord.Color.gold()
 }
 
-# Таблица для хранения блокировок каналов
+# ========== ВЕБ-СЕРВЕР ДЛЯ RENDER ==========
+
+async def handle_root(request):
+    """Обработчик корневого пути"""
+    return web.Response(text="🤖 Discord Points Bot is running!\n"
+                           "📊 Status: Online\n"
+                           f"⏰ Uptime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                           f"🔗 GitHub: https://github.com\n"
+                           "📞 Support: Available")
+
+async def handle_ping(request):
+    """Обработчик пинга"""
+    return web.Response(text="pong")
+
+async def handle_health(request):
+    """Обработчик health check"""
+    return web.json_response({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "discord-points-bot",
+        "bot_status": "online" if bot.is_ready() else "starting",
+        "guild_count": len(bot.guilds) if bot.is_ready() else 0,
+        "database": "connected" if db.pool else "disconnected"
+    })
+
+async def start_web_server():
+    """Запуск веб-сервера"""
+    try:
+        app = web.Application()
+        
+        # Добавляем маршруты
+        app.router.add_get('/', handle_root)
+        app.router.add_get('/ping', handle_ping)
+        app.router.add_get('/health', handle_health)
+        
+        # Запускаем сервер
+        runner = web.AppRunner(app)
+        await runner.setup()
+        
+        # Используем порт из переменных окружения
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        
+        logger.info(f"🌐 Веб-сервер запущен на порту {PORT}")
+        logger.info(f"📡 Доступные эндпоинты:")
+        logger.info(f"   http://0.0.0.0:{PORT}/")
+        logger.info(f"   http://0.0.0.0:{PORT}/ping")
+        logger.info(f"   http://0.0.0.0:{PORT}/health")
+        
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска веб-сервера: {e}")
+        return False
+
+# ========== БАЗА ДАННЫХ ==========
+
 class Database:
     def __init__(self):
         self.pool = None
@@ -78,7 +138,7 @@ class Database:
     async def connect(self):
         """Подключение к базе данных"""
         try:
-            self.pool = await asyncpg.create_pool(DATABASE_URL)
+            self.pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
             await self.init_tables()
             logger.info("✅ Подключено к базе данных")
             return True
@@ -112,21 +172,21 @@ class Database:
                 )
             ''')
             
-            # Таблица блокировок каналов (для указанных каналов)
+            # Таблица блокировок каналов
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS locked_channels (
                     id SERIAL PRIMARY KEY,
                     guild_id BIGINT,
                     channel_id BIGINT,
                     role_id BIGINT,
-                    lock_type TEXT, -- 'send', 'view', 'both'
+                    lock_type TEXT,
                     created_by BIGINT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(guild_id, channel_id, role_id)
                 )
             ''')
             
-            # Таблица каналов для блокировки (список каналов)
+            # Таблица каналов для блокировки
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS channel_list (
                     id SERIAL PRIMARY KEY,
@@ -261,7 +321,6 @@ class Database:
             await conn.execute('DELETE FROM transactions WHERE guild_id = $1', guild_id)
     
     # Методы для управления списком каналов
-    
     async def add_channel_to_list(self, guild_id: int, channel_id: int, channel_name: str, added_by: int):
         """Добавить канал в список для блокировки"""
         async with self.pool.acquire() as conn:
@@ -314,7 +373,6 @@ class Database:
             return result['count'] if result else 0
     
     # Методы для блокировок каналов
-    
     async def add_channel_lock(self, guild_id: int, channel_id: int, role_id: int, lock_type: str, created_by: int):
         """Добавить блокировку канала для роли"""
         async with self.pool.acquire() as conn:
@@ -362,14 +420,6 @@ class Database:
                     'SELECT * FROM locked_channels WHERE guild_id = $1',
                     guild_id
                 )
-    
-    async def get_role_locks(self, guild_id: int, role_id: int):
-        """Получить все блокировки для роли"""
-        async with self.pool.acquire() as conn:
-            return await conn.fetch(
-                'SELECT * FROM locked_channels WHERE guild_id = $1 AND role_id = $2',
-                guild_id, role_id
-            )
     
     async def clear_all_locks(self, guild_id: int):
         """Удалить все блокировки на сервере"""
@@ -637,10 +687,14 @@ async def on_ready():
     """Событие при запуске бота"""
     logger.info(f'✅ Бот {bot.user} запущен!')
     logger.info(f'📊 Серверов: {len(bot.guilds)}')
+    logger.info(f'🌐 Порт веб-сервера: {PORT}')
     
     # Подключаемся к базе данных
     if not await db.connect():
         logger.error("❌ Не удалось подключиться к базе данных!")
+    
+    # Запускаем веб-сервер
+    await start_web_server()
     
     # Устанавливаем статус
     await bot.change_presence(
@@ -656,6 +710,8 @@ async def on_ready():
         logger.info(f'✅ Синхронизировано {len(synced)} команд')
     except Exception as e:
         logger.error(f'❌ Ошибка синхронизации команд: {e}')
+    
+    logger.info("🚀 Бот полностью готов к работе!")
 
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ СПИСКОМ КАНАЛОВ ==========
 
@@ -1154,10 +1210,7 @@ async def lock_info(ctx):
     
     await ctx.send(embed=embed)
 
-# ========== СУЩЕСТВУЮЩИЕ КОМАНДЫ ДЛЯ ПОИНТОВ ==========
-# (Оставляем все существующие команды для поинтов без изменений)
-
-# ... [Весь существующий код команд для поинтов остается без изменений] ...
+# ========== КОМАНДЫ ДЛЯ ПОИНТОВ ==========
 
 @bot.hybrid_command(
     name='addpoints',
@@ -1171,8 +1224,32 @@ async def add_points(
     reason: str = "Выдано админом"
 ):
     """Выдать поинты пользователю"""
-    # ... [существующий код] ...
-    pass
+    if amount <= 0:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Количество поинтов должно быть положительным!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+    
+    embed = discord.Embed(
+        title="✅ Поинты выданы!",
+        color=COLORS['success']
+    )
+    embed.add_field(name="Получатель", value=member.mention, inline=True)
+    embed.add_field(name="Добавлено", value=f"{amount} поинтов", inline=True)
+    embed.add_field(name="Новый баланс", value=f"{new_total} поинтов", inline=True)
+    embed.add_field(name="Причина", value=reason, inline=False)
+    embed.add_field(name="Выдал", value=ctx.author.mention, inline=True)
+    embed.set_footer(text=f"ID: {member.id}")
+    
+    await ctx.send(embed=embed)
+    
+    # Проверяем и выдаем роли
+    await check_and_assign_roles(member)
 
 @bot.hybrid_command(
     name='removepoints',
@@ -1186,10 +1263,303 @@ async def remove_points(
     reason: str = "Изъято админом"
 ):
     """Забрать поинты у пользователя"""
-    # ... [существующий код] ...
-    pass
+    if amount <= 0:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Количество поинтов должно быть положительным!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    new_total = await db.remove_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+    
+    embed = discord.Embed(
+        title="✅ Поинты изъяты!",
+        color=COLORS['success']
+    )
+    embed.add_field(name="Пользователь", value=member.mention, inline=True)
+    embed.add_field(name="Изъято", value=f"{amount} поинтов", inline=True)
+    embed.add_field(name="Новый баланс", value=f"{new_total} поинтов", inline=True)
+    embed.add_field(name="Причина", value=reason, inline=False)
+    embed.add_field(name="Изъял", value=ctx.author.mention, inline=True)
+    embed.set_footer(text=f"ID: {member.id}")
+    
+    await ctx.send(embed=embed)
+    
+    # Проверяем и обновляем роли
+    await check_and_assign_roles(member)
 
-# ... [остальные команды] ...
+@bot.hybrid_command(
+    name='setpoints',
+    description='Установить точное количество поинтов'
+)
+@is_admin()
+async def set_points(
+    ctx,
+    member: discord.Member,
+    amount: int,
+    reason: str = "Установлено админом"
+):
+    """Установить точное количество поинтов"""
+    if amount < 0:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Количество поинтов не может быть отрицательным!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    new_total = await db.set_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+    
+    embed = discord.Embed(
+        title="✅ Поинты установлены!",
+        color=COLORS['success']
+    )
+    embed.add_field(name="Пользователь", value=member.mention, inline=True)
+    embed.add_field(name="Новое значение", value=f"{new_total} поинтов", inline=True)
+    embed.add_field(name="Причина", value=reason, inline=False)
+    embed.add_field(name="Установил", value=ctx.author.mention, inline=True)
+    embed.set_footer(text=f"ID: {member.id}")
+    
+    await ctx.send(embed=embed)
+    
+    # Проверяем и выдаем роли
+    await check_and_assign_roles(member)
+
+@bot.hybrid_command(
+    name='resetpoints',
+    description='Сбросить все поинты на сервере'
+)
+@is_admin()
+async def reset_points(ctx):
+    """Сбросить все поинты на сервере"""
+    embed = discord.Embed(
+        title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
+        description="Вы уверены, что хотите сбросить ВСЕ поинты на сервере?\nЭто действие необратимо!",
+        color=COLORS['error']
+    )
+    embed.add_field(name="Что будет сброшено:", 
+                   value="• Все поинты пользователей\n• Вся история транзакций", 
+                   inline=False)
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        await db.reset_guild_points(ctx.guild.id)
+        
+        confirm_embed = discord.Embed(
+            title="✅ Все поинты сброшены!",
+            description="Все данные о поинтах на этом сервере были удалены.",
+            color=COLORS['success']
+        )
+        await interaction.response.edit_message(embed=confirm_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Сброс отменен",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await ctx.send(embed=embed, view=view)
+
+@bot.hybrid_command(
+    name='points',
+    description='Проверить свои поинты или поинты другого пользователя'
+)
+async def check_points(ctx, member: Optional[discord.Member] = None):
+    """Проверить поинты"""
+    if member is None:
+        member = ctx.author
+    
+    user_id = member.id
+    guild_id = ctx.guild.id
+    
+    # Получаем данные из базы
+    points = await db.get_user_points(user_id, guild_id)
+    position = await db.get_user_position(user_id, guild_id)
+    
+    # Создаем embed
+    embed = discord.Embed(
+        title=f"🏆 Поинты {member.display_name}",
+        color=COLORS['points']
+    )
+    
+    # Основная информация
+    embed.add_field(name="Баланс", value=f"**{points}** поинтов", inline=True)
+    embed.add_field(name="Позиция в рейтинге", value=f"**#{position}**", inline=True)
+    
+    # Система ролей
+    roles_text = []
+    for required_points, role_name in sorted(ROLE_SETTINGS.items()):
+        status = "✅" if points >= required_points else "⏳"
+        roles_text.append(f"{status} **{role_name}** - {required_points} поинтов")
+    
+    embed.add_field(
+        name="🏅 Система ролей",
+        value="\n".join(roles_text),
+        inline=False
+    )
+    
+    # Следующая роль
+    next_role = None
+    points_needed = 0
+    for required_points, role_name in sorted(ROLE_SETTINGS.items()):
+        if points < required_points:
+            next_role = role_name
+            points_needed = required_points - points
+            break
+    
+    if next_role:
+        embed.add_field(
+            name="Следующая цель",
+            value=f"**{next_role}** (нужно ещё {points_needed} поинтов)",
+            inline=False
+        )
+    elif points > 0:
+        embed.add_field(
+            name="🎉 Поздравляем!",
+            value="Вы достигли максимальной роли!",
+            inline=False
+        )
+    
+    embed.set_thumbnail(url=member.display_avatar.url)
+    embed.set_footer(text=f"ID: {user_id}")
+    
+    await ctx.send(embed=embed)
+
+@bot.hybrid_command(
+    name='leaderboard',
+    description='Таблица лидеров по поинтам'
+)
+async def leaderboard(ctx, page: int = 1):
+    """Таблица лидеров"""
+    guild_id = ctx.guild.id
+    
+    # Получаем лидерборд из базы
+    leaderboard_data = await db.get_leaderboard(guild_id, 20)
+    
+    if not leaderboard_data:
+        embed = discord.Embed(
+            title="📊 Таблица лидеров",
+            description="Пока никто не имеет поинтов!",
+            color=COLORS['info']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Получаем статистику
+    stats = await db.get_guild_stats(guild_id)
+    
+    # Создаем embed
+    embed = discord.Embed(
+        title="🏆 Таблица лидеров",
+        color=COLORS['points']
+    )
+    
+    # Добавляем записи
+    medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+    
+    for i, record in enumerate(leaderboard_data, start=1):
+        try:
+            member = await ctx.guild.fetch_member(record['user_id'])
+            username = member.display_name
+        except:
+            username = f"Пользователь ({record['user_id']})"
+        
+        medal = medals[i-1] if i <= len(medals) else f"{i}."
+        
+        # Определяем роль
+        user_role = "Нет роли"
+        for required_points, role_name in sorted(ROLE_SETTINGS.items(), reverse=True):
+            if record['points'] >= required_points:
+                user_role = role_name
+                break
+        
+        embed.add_field(
+            name=f"{medal} {username}",
+            value=f"**{record['points']}** поинтов | 🏅 {user_role}",
+            inline=False
+        )
+    
+    # Статистика
+    embed.add_field(
+        name="📊 Статистика сервера",
+        value=f"• Всего пользователей: **{stats['total_users']}**\n"
+              f"• Всего поинтов: **{stats['total_points']}**\n"
+              f"• Среднее: **{stats['avg_points']:.1f}**\n"
+              f"• Максимум: **{stats['max_points']}**",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"Всего участников: {stats['total_users']}")
+    
+    await ctx.send(embed=embed)
+
+@bot.hybrid_command(
+    name='roles',
+    description='Показать систему ролей'
+)
+async def show_roles(ctx):
+    """Показать систему ролей"""
+    embed = discord.Embed(
+        title="🏅 Система ролей",
+        description="Роли выдаются автоматически при достижении определенного количества поинтов",
+        color=COLORS['points']
+    )
+    
+    for required_points, role_name in sorted(ROLE_SETTINGS.items()):
+        color = ROLE_COLORS.get(role_name, discord.Color.default())
+        color_block = f"`{str(color).upper()}`"
+        
+        embed.add_field(
+            name=f"🎖️ {role_name}",
+            value=f"**{required_points}** поинтов\nЦвет: {color_block}",
+            inline=True
+        )
+    
+    embed.set_footer(text="Админские роли: " + ", ".join(ADMIN_ROLES))
+    await ctx.send(embed=embed)
+
+@bot.hybrid_command(
+    name='ping',
+    description='Проверить пинг бота'
+)
+async def ping_command(ctx):
+    """Проверить пинг бота"""
+    latency = round(bot.latency * 1000)
+    
+    embed = discord.Embed(
+        title="🏓 Понг!",
+        color=COLORS['success']
+    )
+    embed.add_field(name="Задержка API", value=f"**{latency}мс**", inline=True)
+    embed.add_field(name="Серверов", value=f"**{len(bot.guilds)}**", inline=True)
+    embed.add_field(name="Порт веб-сервера", value=f"**{PORT}**", inline=True)
+    embed.add_field(name="Статус БД", value="✅ **Подключена**" if db.pool else "❌ **Отключена**", inline=True)
+    embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
+    embed.set_footer(text=f"Эндпоинт для пинга: /ping")
+    
+    await ctx.send(embed=embed)
 
 @bot.hybrid_command(
     name='help',
@@ -1210,7 +1580,7 @@ async def help_command(ctx):
         color=COLORS['info']
     )
     
-    # Команды для всех (поинты)
+    # Команды для всех
     embed.add_field(
         name="👤 Команды для всех",
         value="• `/points [@пользователь]` - Проверить поинты\n"
@@ -1221,7 +1591,7 @@ async def help_command(ctx):
         inline=False
     )
     
-    # Команды для админов (поинты)
+    # Команды для админов
     if is_user_admin:
         embed.add_field(
             name="👑 Команды для админов (поинты)",
@@ -1259,6 +1629,7 @@ async def help_command(ctx):
         value=f"• Админские роли: {', '.join(ADMIN_ROLES)}\n"
               f"• База данных: PostgreSQL\n"
               f"• Хостинг: Render.com\n"
+              f"• Порт: {PORT}\n"
               f"• Режим работы: 24/7",
         inline=False
     )
@@ -1270,16 +1641,47 @@ async def help_command(ctx):
 @bot.event
 async def on_command_error(ctx, error):
     """Обработка ошибок команд"""
-    # ... [существующий код обработки ошибок] ...
-    pass
+    if isinstance(error, commands.CheckFailure):
+        embed = discord.Embed(
+            title="❌ Недостаточно прав",
+            description=f"Только **{', '.join(ADMIN_ROLES)}** могут использовать эту команду!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+    elif isinstance(error, commands.MissingRequiredArgument):
+        embed = discord.Embed(
+            title="❌ Не хватает аргументов",
+            description=f"Используйте `{PREFIX}help` для справки по командам",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+    elif isinstance(error, commands.BadArgument):
+        embed = discord.Embed(
+            title="❌ Неправильные аргументы",
+            description="Проверьте правильность введенных данных",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+    elif isinstance(error, commands.CommandNotFound):
+        pass  # Игнорируем
+    else:
+        logger.error(f"Необработанная ошибка команды: {error}")
+        embed = discord.Embed(
+            title="❌ Неизвестная ошибка",
+            description="Произошла неизвестная ошибка.",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
 
 # ========== ЗАПУСК БОТА ==========
 
 if __name__ == "__main__":
-    logger.info("🚀 Запуск Discord Points Bot с системой блокировки каналов")
+    logger.info("🚀 Запуск Discord Points Bot")
     logger.info(f"🤖 Префикс команд: {PREFIX}")
     logger.info(f"👑 Админские роли: {ADMIN_ROLES}")
+    logger.info(f"🌐 Порт веб-сервера: {PORT}")
     logger.info("🗄️  Используется база данных PostgreSQL")
+    logger.info("🔄 Бот будет работать 24/7 с веб-сервером для пинга")
     
     try:
         bot.run(TOKEN)
