@@ -1650,40 +1650,82 @@ async def help_command(ctx):
 @bot.event
 async def on_command_error(ctx, error):
     """Обработка ошибок команд"""
-    if isinstance(error, commands.CheckFailure):
-        # Преобразуем ID ролей в строки для отображения
-        admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS)
-        
-        embed = discord.Embed(
-            title="❌ Недостаточно прав",
-            description=f"Только роли с ID: **{admin_role_ids_str}** могут использовать эту команду!",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-    elif isinstance(error, commands.MissingRequiredArgument):
-        embed = discord.Embed(
-            title="❌ Не хватает аргументов",
-            description=f"Используйте `{PREFIX}help` для справки по командам",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-    elif isinstance(error, commands.BadArgument):
-        embed = discord.Embed(
-            title="❌ Неправильные аргументы",
-            description="Проверьте правильность введенных данных",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-    elif isinstance(error, commands.CommandNotFound):
-        pass  # Игнорируем
-    else:
-        logger.error(f"Необработанная ошибка команды: {error}")
-        embed = discord.Embed(
-            title="❌ Неизвестная ошибка",
-            description="Произошла неизвестная ошибка.",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
+    
+    # Проверяем, является ли это slash-командой (есть interaction)
+    is_slash_command = hasattr(ctx, 'interaction') and ctx.interaction is not None
+    
+    try:
+        if isinstance(error, commands.CheckFailure):
+            # Преобразуем ID ролей в строки для отображения
+            admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
+            
+            embed = discord.Embed(
+                title="❌ Недостаточно прав",
+                description=f"Только роли с ID: **{admin_role_ids_str}** могут использовать эту команду!",
+                color=COLORS['error']
+            )
+            
+            if is_slash_command:
+                # Для slash-команд используем interaction
+                if not ctx.interaction.response.is_done():
+                    await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
+                else:
+                    await ctx.interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                # Для префиксных команд используем ctx.send
+                await ctx.send(embed=embed)
+                
+        elif isinstance(error, commands.MissingRequiredArgument):
+            embed = discord.Embed(
+                title="❌ Не хватает аргументов",
+                description=f"Используйте `{PREFIX}help` для справки по командам",
+                color=COLORS['error']
+            )
+            
+            if is_slash_command:
+                if not ctx.interaction.response.is_done():
+                    await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
+                else:
+                    await ctx.interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await ctx.send(embed=embed)
+                
+        elif isinstance(error, commands.BadArgument):
+            embed = discord.Embed(
+                title="❌ Неправильные аргументы",
+                description="Проверьте правильность введенных данных",
+                color=COLORS['error']
+            )
+            
+            if is_slash_command:
+                if not ctx.interaction.response.is_done():
+                    await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
+                else:
+                    await ctx.interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await ctx.send(embed=embed)
+                
+        elif isinstance(error, commands.CommandNotFound):
+            pass  # Игнорируем
+            
+        else:
+            logger.error(f"Необработанная ошибка команды: {error}")
+            embed = discord.Embed(
+                title="❌ Неизвестная ошибка",
+                description="Произошла неизвестная ошибка.",
+                color=COLORS['error']
+            )
+            
+            if is_slash_command:
+                if not ctx.interaction.response.is_done():
+                    await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
+                else:
+                    await ctx.interaction.followup.send(embed=embed, ephemeral=True)
+            else:
+                await ctx.send(embed=embed)
+                
+    except Exception as e:
+        logger.error(f"Ошибка при обработке ошибки команды: {e}")
 
 # ========== ЗАПУСК БОТА ==========
 
