@@ -1626,7 +1626,7 @@ async def help_command(ctx):
     # Информация о системе
     embed.add_field(
         name="ℹ️ Информация о боте",
-        value=f"• Админские роли: {', '.join(ADMIN_ROLES)}\n"
+        value=f"• Админские роли: {', '.join(ADMIN_ROLE_IDS)}\n"
               f"• База данных: PostgreSQL\n"
               f"• Хостинг: Render.com\n"
               f"• Порт: {PORT}\n"
