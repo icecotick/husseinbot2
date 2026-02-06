@@ -97,7 +97,7 @@ async def handle_health(request):
         "service": "discord-points-bot",
         "bot_status": "online" if bot.is_ready() else "starting",
         "guild_count": len(bot.guilds) if bot.is_ready() else 0,
-        "database": "connected" if db.pool else "disconnected"
+        "database": "connected" if hasattr(db, 'pool') and db.pool else "disconnected"
     })
 
 async def start_web_server():
@@ -264,7 +264,8 @@ class Database:
             ''', user_id, guild_id, amount)
             
             # Записываем транзакцию
-            difference = amount - (await self.get_user_points(user_id, guild_id))
+            current_points = await self.get_user_points(user_id, guild_id)
+            difference = amount - current_points
             await conn.execute('''
                 INSERT INTO transactions (user_id, guild_id, amount, admin_id, reason)
                 VALUES ($1, $2, $3, $4, $5)
@@ -288,7 +289,7 @@ class Database:
             result = await conn.fetchrow('''
                 SELECT COUNT(*) as position FROM users 
                 WHERE guild_id = $1 AND points > (
-                    SELECT points FROM users 
+                    SELECT COALESCE(points, 0) FROM users 
                     WHERE user_id = $2 AND guild_id = $1
                 )
             ''', guild_id, user_id)
@@ -310,7 +311,7 @@ class Database:
             return {
                 'total_users': stats['total_users'] or 0,
                 'total_points': stats['total_points'] or 0,
-                'avg_points': stats['avg_points'] or 0,
+                'avg_points': round(stats['avg_points'] or 0, 1),
                 'max_points': stats['max_points'] or 0
             }
     
@@ -539,7 +540,10 @@ async def send_role_notification(member: discord.Member, role_name: str, points:
         if member.guild.system_channel:
             await member.guild.system_channel.send(member.mention, embed=embed)
         else:
-            await member.send(embed=embed)
+            try:
+                await member.send(embed=embed)
+            except:
+                pass  # Игнорируем ошибки отправки в ЛС
             
     except Exception as e:
         logger.error(f"Ошибка отправки уведомления: {e}")
@@ -1542,7 +1546,8 @@ async def show_roles(ctx):
             inline=True
         )
     
-    embed.set_footer(text="Админские роли: " + ", ".join(ADMIN_ROLES))
+    admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS)
+    embed.set_footer(text="Админские ID ролей: " + admin_role_ids_str)
     await ctx.send(embed=embed)
 
 @bot.hybrid_command(
@@ -1560,7 +1565,7 @@ async def ping_command(ctx):
     embed.add_field(name="Задержка API", value=f"**{latency}мс**", inline=True)
     embed.add_field(name="Серверов", value=f"**{len(bot.guilds)}**", inline=True)
     embed.add_field(name="Порт веб-сервера", value=f"**{PORT}**", inline=True)
-    embed.add_field(name="Статус БД", value="✅ **Подключена**" if db.pool else "❌ **Отключена**", inline=True)
+    embed.add_field(name="Статус БД", value="✅ **Подключена**" if hasattr(db, 'pool') and db.pool else "❌ **Отключена**", inline=True)
     embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
     embed.set_footer(text=f"Эндпоинт для пинга: /ping")
     
@@ -1575,7 +1580,11 @@ async def help_command(ctx):
     # Проверяем, является ли пользователь админом
     is_user_admin = False
     try:
-        is_user_admin = await is_admin().predicate(ctx)
+        # Создаем временную проверку админских прав
+        is_user_admin = ctx.author.guild_permissions.administrator or any(
+            admin_role_id in [role.id for role in ctx.author.roles] 
+            for admin_role_id in ADMIN_ROLE_IDS
+        )
     except:
         pass
     
@@ -1629,7 +1638,6 @@ async def help_command(ctx):
         )
     
     # Информация о системе
-    # Исправляем ошибку - преобразуем ID в строки
     admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS)
     
     embed.add_field(
