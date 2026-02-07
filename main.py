@@ -1571,6 +1571,32 @@ async def ping_command(ctx):
     
     await ctx.send(embed=embed)
 
+
+@bot.hybrid_command(
+    name='нюк',
+    description='Отправить пранк-сообщение (админы)'
+)
+@is_admin()
+async def nuke_command(ctx):
+    """Простой пранк с задержкой"""
+    # Проверяем права на упоминание everyone
+    if not ctx.channel.permissions_for(ctx.guild.me).mention_everyone:
+        await ctx.send("❌ У бота нет прав упоминать @everyone!", ephemeral=True)
+        return
+    
+    # Отправляем простое сообщение
+    await ctx.send("@everyone вы были нюкнуты гнидой")
+    
+    # Отправляем подтверждение автору (скрытое)
+    await ctx.send("✅ Пранк отправлен! Через 5 секунд будет сообщение что это пранк.", ephemeral=True)
+    
+    # Ждем 5 секунд
+    await asyncio.sleep(5)
+    
+    # Отправляем сообщение что это пранк
+    await ctx.send("**Это был пранк ЛОЛ**!Ж)")
+
+
 @bot.hybrid_command(
     name='help',
     description='Показать все команды'
