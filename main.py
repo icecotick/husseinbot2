@@ -1572,29 +1572,183 @@ async def ping_command(ctx):
     await ctx.send(embed=embed)
 
 
+@bot.hybrid_command(name='export', description='Экспорт данных в CSV')
+@is_admin()
+async def export_command(ctx):
+    """Экспорт данных о поинтах"""
+    guild_id = ctx.guild.id
+    
+    # Получаем все данные
+    users = await bot.db.get_all_users(guild_id)
+    
+    # Формируем CSV
+    csv_data = "ID пользователя,Ник,Поинты,Позиция\n"
+    
+    for i, user in enumerate(users, 1):
+        try:
+            member = await ctx.guild.fetch_member(user['user_id'])
+            username = member.display_name
+        except:
+            username = f"User_{user['user_id']}"
+        
+        csv_data += f"{user['user_id']},{username},{user['points']},{i}\n"
+    
+    # Создаем файл
+    with open(f'export_{guild_id}.csv', 'w', encoding='utf-8') as f:
+        f.write(csv_data)
+    
+    # Отправляем файл
+    file = discord.File(f'export_{guild_id}.csv')
+    await ctx.send("📁 Экспорт данных о поинтах:", file=file)
+
+
 @bot.hybrid_command(
-    name='нюк',
-    description='Отправить пранк-сообщение (админы)'
+    name='raid',
+    description='Отправить рейд-оповещение'
 )
 @is_admin()
-async def nuke_command(ctx):
-    """Простой пранк с задержкой"""
+async def raid_command(
+    ctx,
+    clan: str,
+    link: str
+):
+    """
+    Отправить рейд-оповещение с упоминанием @everyone
+    
+    Параметры:
+    1. Клан - название клана
+    2. Ссылка - ссылка на рейд
+    """
     # Проверяем права на упоминание everyone
     if not ctx.channel.permissions_for(ctx.guild.me).mention_everyone:
-        await ctx.send("❌ У бота нет прав упоминать @everyone!", ephemeral=True)
+        embed = discord.Embed(
+            title="❌ Недостаточно прав",
+            description="Мне нужны права на упоминание @everyone для этой команды!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed, ephemeral=True)
         return
     
-    # Отправляем простое сообщение
-    await ctx.send("@everyone вы были нюкнуты гнидой")
+    # Проверяем валидность ссылки
+    if not link.startswith(('http://', 'https://', 'discord.gg/')):
+        await ctx.send("❌ Ссылка должна начинаться с http://, https:// или discord.gg/", ephemeral=True)
+        return
     
-    # Отправляем подтверждение автору (скрытое)
-    await ctx.send("✅ Пранк отправлен! Через 5 секунд будет сообщение что это пранк.", ephemeral=True)
+    # Создаем оповещение
+    embed = discord.Embed(
+        title="🚨 РЕЙД ОБЪЯВЛЕН! 🚨",
+        description="Всем участникам срочно присоединиться!",
+        color=discord.Color.red()
+    )
     
-    # Ждем 5 секунд
-    await asyncio.sleep(5)
+    embed.add_field(
+        name="👥 Клан",
+        value=f"**{clan}**",
+        inline=True
+    )
     
-    # Отправляем сообщение что это пранк
-    await ctx.send("**Это был пранк ЛОЛ**!Ж)")
+    embed.add_field(
+        name="🔗 Ссылка",
+        value=f"[Нажмите чтобы присоединиться]({link})",
+        inline=True
+    )
+    
+    embed.set_footer(
+        text=f"Оповещение отправлено {ctx.author.display_name}",
+        icon_url=ctx.author.display_avatar.url
+    )
+    
+    # Отправляем с упоминанием everyone
+    await ctx.send(content="@everyone", embed=embed)
+    
+    # Отправляем подтверждение автору
+    confirm_embed = discord.Embed(
+        title="✅ Рейд-оповещение отправлено!",
+        description=f"Клан: **{clan}**\nСсылка: {link}",
+        color=COLORS['success']
+    )
+    await ctx.send(embed=confirm_embed, ephemeral=True)
+
+
+
+@bot.hybrid_command(
+    name='unlock',
+    description='Разблокировать все чаты из списка для конкретной роли'
+)
+@is_admin()
+async def unlock_role_command(ctx):
+    """Разблокировать все каналы из списка для роли 1431589898183512129"""
+    # ID конкретной роли
+    TARGET_ROLE_ID = 1431589898183512129
+    
+    # Получаем роль по ID
+    target_role = ctx.guild.get_role(TARGET_ROLE_ID)
+    if not target_role:
+        # Пробуем получить роль через fetch
+        try:
+            target_role = await ctx.guild.fetch_role(TARGET_ROLE_ID)
+        except:
+            embed = discord.Embed(
+                title="❌ Роль не найдена",
+                description=f"Роль с ID `{TARGET_ROLE_ID}` не найдена на сервере!",
+                color=COLORS['error']
+            )
+            await ctx.send(embed=embed)
+            return
+    
+    embed = discord.Embed(
+        title="🔓 Разблокировка каналов",
+        description=f"Начинаю разблокировку каналов для роли {target_role.mention}...",
+        color=COLORS['info']
+    )
+    
+    embed.add_field(name="ID роли", value=f"`{TARGET_ROLE_ID}`", inline=True)
+    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
+    
+    message = await ctx.send(embed=embed)
+    
+    # Разблокируем каналы
+    results = await unlock_all_channels_in_list(ctx.guild, target_role)
+    
+    # Создаем итоговый отчет
+    success_count = sum(1 for r in results if "✅" in r)
+    warning_count = sum(1 for r in results if "⚠️" in r)
+    error_count = sum(1 for r in results if "❌" in r)
+    
+    final_embed = discord.Embed(
+        title="✅ Разблокировка завершена",
+        color=COLORS['success'] if error_count == 0 else COLORS['warning']
+    )
+    
+    final_embed.add_field(
+        name="📊 Результаты",
+        value=f"✅ Успешно: {success_count} каналов\n"
+              f"⚠️ С предупреждениями: {warning_count} каналов\n"
+              f"❌ Ошибки: {error_count} каналов",
+        inline=False
+    )
+    
+    # Показываем первые 10 результатов
+    if len(results) <= 10:
+        final_embed.add_field(
+            name="📝 Детали",
+            value="\n".join(results[:10]),
+            inline=False
+        )
+    
+    final_embed.add_field(
+        name="🎯 Для роли",
+        value=f"{target_role.mention} (ID: `{TARGET_ROLE_ID}`)",
+        inline=True
+    )
+    
+    final_embed.add_field(
+        name="👤 Разблокировал",
+        value=ctx.author.mention,
+        inline=True
+    )
+    
+    await message.edit(embed=final_embed)
 
 
 @bot.hybrid_command(
