@@ -1670,13 +1670,45 @@ async def raid_command(
     await ctx.send(embed=confirm_embed, ephemeral=True)
 
 
+@bot.hybrid_command(
+    name='sync',
+    description='Синхронизировать команды (только для владельца бота)'
+)
+@commands.is_owner()
+async def sync_command(ctx):
+    """Синхронизировать слэш-команды"""
+    try:
+        synced = await bot.tree.sync()
+        
+        embed = discord.Embed(
+            title="✅ Синхронизация команд",
+            description=f"Успешно синхронизировано {len(synced)} команд:",
+            color=COLORS['success']
+        )
+        
+        # Список команд
+        commands_list = "\n".join([f"• `/{cmd.name}` - {cmd.description}" for cmd in synced])
+        embed.add_field(name="Доступные команды", value=commands_list[:1024], inline=False)
+        
+        await ctx.send(embed=embed)
+        logger.info(f"Синхронизировано {len(synced)} команд по запросу {ctx.author}")
+        
+    except Exception as e:
+        embed = discord.Embed(
+            title="❌ Ошибка синхронизации",
+            description=str(e),
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        logger.error(f"Ошибка синхронизации: {e}")
+
 
 @bot.hybrid_command(
     name='unlock',
-    description='Разблокировать все чаты из списка для конкретной роли'
+    description='Разблокировать все каналы из списка для конкретной роли'
 )
 @is_admin()
-async def unlock_role_command(ctx):
+async def unlock_command(ctx):
     """Разблокировать все каналы из списка для роли 1431589898183512129"""
     # ID конкретной роли
     TARGET_ROLE_ID = 1431589898183512129
@@ -1749,6 +1781,126 @@ async def unlock_role_command(ctx):
     )
     
     await message.edit(embed=final_embed)
+
+
+
+@bot.hybrid_command(
+    name='lock',
+    description='Заблокировать все каналы из списка для конкретной роли'
+)
+@is_admin()
+async def lock_command(
+    ctx,
+    lock_type: str = "send"
+):
+    """
+    Заблокировать все каналы из списка для роли 1431589898183512129
+    
+    Типы блокировки:
+    - send: запрет писать, ставить реакции, прикреплять файлы
+    - view: запрет читать и писать (канал скрыт)
+    - both: полная блокировка
+    """
+    # ID конкретной роли
+    TARGET_ROLE_ID = 1431589898183512129
+    
+    lock_types = ['send', 'view', 'both']
+    
+    if lock_type.lower() not in lock_types:
+        embed = discord.Embed(
+            title="❌ Неверный тип блокировки",
+            description=f"Доступные типы: {', '.join(lock_types)}",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Получаем роль по ID
+    target_role = ctx.guild.get_role(TARGET_ROLE_ID)
+    if not target_role:
+        # Пробуем получить роль через fetch
+        try:
+            target_role = await ctx.guild.fetch_role(TARGET_ROLE_ID)
+        except:
+            embed = discord.Embed(
+                title="❌ Роль не найдена",
+                description=f"Роль с ID `{TARGET_ROLE_ID}` не найдена на сервере!",
+                color=COLORS['error']
+            )
+            await ctx.send(embed=embed)
+            return
+    
+    embed = discord.Embed(
+        title="🔒 Блокировка каналов",
+        description=f"Начинаю блокировку каналов для роли {target_role.mention}...",
+        color=COLORS['warning']
+    )
+    
+    # Показываем тип блокировки
+    lock_info = {
+        'send': "📝 Запрещено писать, ставить реакции и прикреплять файлы",
+        'view': "👁️ Запрещено читать и писать (канал скрыт)",
+        'both': "🚫 Полная блокировка"
+    }
+    
+    embed.add_field(name="Тип блокировки", value=lock_info[lock_type.lower()], inline=False)
+    embed.add_field(name="ID роли", value=f"`{TARGET_ROLE_ID}`", inline=True)
+    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
+    
+    message = await ctx.send(embed=embed)
+    
+    # Блокируем каналы
+    results = await lock_all_channels_in_list(ctx.guild, target_role, lock_type.lower())
+    
+    # Создаем итоговый отчет
+    success_count = sum(1 for r in results if "✅" in r)
+    warning_count = sum(1 for r in results if "⚠️" in r)
+    error_count = sum(1 for r in results if "❌" in r)
+    
+    final_embed = discord.Embed(
+        title="✅ Блокировка завершена",
+        color=COLORS['success'] if error_count == 0 else COLORS['warning']
+    )
+    
+    final_embed.add_field(
+        name="📊 Результаты",
+        value=f"✅ Успешно: {success_count} каналов\n"
+              f"⚠️ С предупреждениями: {warning_count} каналов\n"
+              f"❌ Ошибки: {error_count} каналов",
+        inline=False
+    )
+    
+    # Показываем первые 10 результатов
+    if len(results) <= 10:
+        final_embed.add_field(
+            name="📝 Детали",
+            value="\n".join(results[:10]),
+            inline=False
+        )
+    else:
+        # Показываем статистику
+        final_embed.add_field(
+            name="ℹ️ Информация",
+            value=f"Обработано {len(results)} каналов",
+            inline=False
+        )
+    
+    final_embed.add_field(
+        name="🎯 Для роли",
+        value=f"{target_role.mention} (ID: `{TARGET_ROLE_ID}`)",
+        inline=True
+    )
+    
+    final_embed.add_field(
+        name="👤 Заблокировал",
+        value=ctx.author.mention,
+        inline=True
+    )
+    
+    final_embed.set_footer(text=f"Тип блокировки: {lock_type.upper()}")
+    
+    await message.edit(embed=final_embed)
+
 
 
 @bot.hybrid_command(
