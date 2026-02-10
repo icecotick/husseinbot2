@@ -59,11 +59,11 @@ COLORS = {
 
 # Настройки ролей (поинты: название_роли)
 ROLE_SETTINGS = {
-    50: 'raider newgen',
-    100: 'raider scout', 
-    150: 'raider striker',
-    350: 'raider legend',
-    500: 'raider commander'
+    100: 'raider newgen',
+    200: 'raider scout', 
+    400: 'raider striker',
+    800: 'raider legend',
+    1600: 'raider commander'
 }
 
 # Цвета для ролей
