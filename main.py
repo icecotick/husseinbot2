@@ -1902,6 +1902,135 @@ async def lock_command(
     await message.edit(embed=final_embed)
 
 
+@bot.hybrid_command(
+    name='addpoints_multi',
+    description='Выдать поинты нескольким пользователям сразу'
+)
+@is_admin()
+async def add_points_multi(
+    ctx,
+    members: commands.Greedy[discord.Member],
+    amount: int,
+    reason: str = "Выдано админом"
+):
+    """Выдать поинты нескольким пользователям сразу"""
+    if amount <= 0:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Количество поинтов должно быть положительным!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    if len(members) == 0:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Не указаны пользователи!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    if len(members) > 25:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Можно выдать поинты максимум 25 пользователям за раз!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Отправляем начальное сообщение
+    embed = discord.Embed(
+        title="⏳ Массовая выдача поинтов",
+        description=f"Выдаю поинты {len(members)} пользователям...",
+        color=COLORS['warning']
+    )
+    embed.add_field(name="Количество поинтов", value=f"**{amount}** каждому", inline=True)
+    embed.add_field(name="Причина", value=reason, inline=True)
+    
+    message = await ctx.send(embed=embed)
+    
+    # Выдаем поинты
+    results = []
+    success_count = 0
+    
+    for member in members:
+        try:
+            new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+            results.append(f"✅ {member.mention}: +{amount} поинтов (всего: {new_total})")
+            success_count += 1
+            
+            # Проверяем и выдаем роли
+            await check_and_assign_roles(member)
+            
+        except Exception as e:
+            results.append(f"❌ {member.mention}: Ошибка - {str(e)[:50]}")
+    
+    # Создаем итоговый отчет
+    final_embed = discord.Embed(
+        title="✅ Массовая выдача завершена",
+        color=COLORS['success'] if success_count == len(members) else COLORS['warning']
+    )
+    
+    final_embed.add_field(
+        name="📊 Результаты",
+        value=f"✅ Успешно: {success_count}/{len(members)} пользователей\n"
+              f"❌ Ошибки: {len(members) - success_count}",
+        inline=False
+    )
+    
+    final_embed.add_field(
+        name="📝 Детали операции",
+        value=f"• Поинтов каждому: **{amount}**\n"
+              f"• Причина: **{reason}**\n"
+              f"• Выдал: {ctx.author.mention}",
+        inline=False
+    )
+    
+    # Показываем первые 15 результатов
+    if len(results) <= 15:
+        final_embed.add_field(
+            name="👥 Результаты по пользователям",
+            value="\n".join(results[:15]),
+            inline=False
+        )
+    else:
+        # Показываем только статистику для большого количества
+        final_embed.add_field(
+            name="ℹ️ Информация",
+            value=f"Обработано {len(members)} пользователей",
+            inline=False
+        )
+        
+        # Можно добавить кнопку для просмотра деталей
+        if len(results) <= 100:  # Если не слишком много для файла
+            # Создаем файл с результатами
+            file_content = "Результаты массовой выдачи поинтов:\n\n"
+            file_content += f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+            file_content += f"Количество поинтов: {amount}\n"
+            file_content += f"Причина: {reason}\n"
+            file_content += f"Выдал: {ctx.author.display_name} ({ctx.author.id})\n"
+            file_content += f"Сервер: {ctx.guild.name} ({ctx.guild.id})\n\n"
+            file_content += "Детали:\n" + "\n".join(results)
+            
+            # Сохраняем во временный файл
+            filename = f"mass_addpoints_{ctx.guild.id}_{int(datetime.now().timestamp())}.txt"
+            with open(filename, 'w', encoding='utf-8') as f:
+                f.write(file_content)
+            
+            # Отправляем файл
+            file = discord.File(filename)
+            await ctx.send(f"📋 Полные результаты для {len(members)} пользователей:", file=file)
+            
+            # Удаляем временный файл
+            import os
+            os.remove(filename)
+    
+    await message.edit(embed=final_embed)
+
+
 
 @bot.hybrid_command(
     name='help',
@@ -1921,7 +2050,7 @@ async def help_command(ctx):
         pass
     
     embed = discord.Embed(
-        title="🆘 Помощь по командам",
+        title="Помощь по командам",
         description=f"Префикс команд: `{PREFIX}`\nБот также поддерживает slash-команды (/)",
         color=COLORS['info']
     )
