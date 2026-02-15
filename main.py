@@ -744,7 +744,7 @@ async def add_channel(ctx, channel: discord.TextChannel):
             color=COLORS['error']
         )
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
 
 @bot.command(name='removechannel')
 @is_admin()
@@ -765,6 +765,7 @@ async def remove_channel(ctx, channel: Optional[discord.TextChannel] = None):
                 description=f"Не удалось удалить канал {channel.mention}",
                 color=COLORS['error']
             )
+        await safe_send(ctx, embed=embed)
     else:
         embed = discord.Embed(
             title="⚠️ Удаление всех каналов",
@@ -817,10 +818,7 @@ async def remove_channel(ctx, channel: Optional[discord.TextChannel] = None):
         view.add_item(confirm_button)
         view.add_item(cancel_button)
         
-        await ctx.send(embed=embed, view=view)
-        return
-    
-    await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed, view=view)
 
 @bot.command(name='listchannels')
 @is_admin()
@@ -834,7 +832,7 @@ async def list_channels(ctx):
             description="Добавьте каналы с помощью `!addchannel #канал`",
             color=COLORS['info']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     embed = discord.Embed(
@@ -865,7 +863,7 @@ async def list_channels(ctx):
     count = len(channels)
     embed.set_footer(text=f"Всего каналов: {count}")
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
 
 @bot.command(name='lockchannels')
 @is_admin()
@@ -886,7 +884,7 @@ async def lock_channels(ctx, role: discord.Role, lock_type: str = "send"):
             description=f"Доступные типы: {', '.join(lock_types)}",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     embed = discord.Embed(
@@ -904,7 +902,9 @@ async def lock_channels(ctx, role: discord.Role, lock_type: str = "send"):
     
     embed.add_field(name="Тип блокировки", value=lock_info[lock_type.lower()], inline=False)
     
-    message = await ctx.send(embed=embed)
+    message = await safe_send(ctx, embed=embed)
+    if not message:
+        return
     
     # Блокируем каналы
     results = await lock_all_channels_in_list(ctx.guild, role, lock_type.lower())
@@ -956,7 +956,7 @@ async def lock_channels(ctx, role: discord.Role, lock_type: str = "send"):
     
     final_embed.set_footer(text=f"Тип блокировки: {lock_type.upper()}")
     
-    await message.edit(embed=final_embed)
+    await safe_edit(message, embed=final_embed)
 
 @bot.command(name='unlockchannels')
 @is_admin()
@@ -975,7 +975,9 @@ async def unlock_channels(ctx, role: Optional[discord.Role] = None):
             color=COLORS['info']
         )
     
-    message = await ctx.send(embed=embed)
+    message = await safe_send(ctx, embed=embed)
+    if not message:
+        return
     
     # Разблокируем каналы
     results = await unlock_all_channels_in_list(ctx.guild, role)
@@ -1017,7 +1019,7 @@ async def unlock_channels(ctx, role: Optional[discord.Role] = None):
         inline=True
     )
     
-    await message.edit(embed=final_embed)
+    await safe_edit(message, embed=final_embed)
 
 @bot.command(name='clearlocks')
 @is_admin()
@@ -1032,7 +1034,7 @@ async def clear_locks(ctx):
             description="На сервере нет активных блокировок каналов",
             color=COLORS['info']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     embed = discord.Embed(
@@ -1096,7 +1098,7 @@ async def clear_locks(ctx):
     view.add_item(confirm_button)
     view.add_item(cancel_button)
     
-    await ctx.send(embed=embed, view=view)
+    await safe_send(ctx, embed=embed, view=view)
 
 @bot.command(name='lockinfo')
 @is_admin()
@@ -1111,7 +1113,7 @@ async def lock_info(ctx):
             description="На сервере нет активных блокировок каналов",
             color=COLORS['info']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     embed = discord.Embed(
@@ -1173,7 +1175,7 @@ async def lock_info(ctx):
     if len(roles_dict) > 5:
         embed.set_footer(text=f"Показано 5 из {len(roles_dict)} ролей. Используйте !listchannels для полного списка")
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
 
 # ========== КОМАНДЫ ДЛЯ ПОИНТОВ ==========
 
@@ -1187,7 +1189,7 @@ async def add_points(ctx, member: discord.Member, amount: int, *, reason: str = 
             description="Количество поинтов должно быть положительным!",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
@@ -1203,7 +1205,7 @@ async def add_points(ctx, member: discord.Member, amount: int, *, reason: str = 
     embed.add_field(name="Выдал", value=ctx.author.mention, inline=True)
     embed.set_footer(text=f"ID: {member.id}")
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
     
     # Проверяем и выдаем роли
     await check_and_assign_roles(member)
@@ -1218,7 +1220,7 @@ async def remove_points(ctx, member: discord.Member, amount: int, *, reason: str
             description="Количество поинтов должно быть положительным!",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     new_total = await db.remove_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
@@ -1234,7 +1236,7 @@ async def remove_points(ctx, member: discord.Member, amount: int, *, reason: str
     embed.add_field(name="Изъял", value=ctx.author.mention, inline=True)
     embed.set_footer(text=f"ID: {member.id}")
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
     
     # Проверяем и обновляем роли
     await check_and_assign_roles(member)
@@ -1249,7 +1251,7 @@ async def set_points(ctx, member: discord.Member, amount: int, *, reason: str = 
             description="Количество поинтов не может быть отрицательным!",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     new_total = await db.set_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
@@ -1264,7 +1266,7 @@ async def set_points(ctx, member: discord.Member, amount: int, *, reason: str = 
     embed.add_field(name="Установил", value=ctx.author.mention, inline=True)
     embed.set_footer(text=f"ID: {member.id}")
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
     
     # Проверяем и выдаем роли
     await check_and_assign_roles(member)
@@ -1318,7 +1320,7 @@ async def reset_points(ctx):
     view.add_item(confirm_button)
     view.add_item(cancel_button)
     
-    await ctx.send(embed=embed, view=view)
+    await safe_send(ctx, embed=embed, view=view)
 
 @bot.command(name='points')
 async def check_points(ctx, member: Optional[discord.Member] = None):
@@ -1380,7 +1382,7 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     embed.set_thumbnail(url=member.display_avatar.url)
     embed.set_footer(text=f"ID: {user_id}")
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
 
 @bot.command(name='leaderboard')
 async def leaderboard(ctx, page: int = 1):
@@ -1396,7 +1398,7 @@ async def leaderboard(ctx, page: int = 1):
             description="Пока никто не имеет поинтов!",
             color=COLORS['info']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     # Получаем статистику
@@ -1445,7 +1447,7 @@ async def leaderboard(ctx, page: int = 1):
     
     embed.set_footer(text=f"Всего участников: {stats['total_users']}")
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
 
 @bot.command(name='roles')
 async def show_roles(ctx):
@@ -1468,7 +1470,7 @@ async def show_roles(ctx):
     
     admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS)
     embed.set_footer(text="Админские ID ролей: " + admin_role_ids_str)
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
 
 @bot.command(name='ping')
 async def ping_command(ctx):
@@ -1486,7 +1488,7 @@ async def ping_command(ctx):
     embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
     embed.set_footer(text=f"Префикс команд: {PREFIX}")
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
 
 @bot.command(name='export')
 @is_admin()
@@ -1495,7 +1497,7 @@ async def export_command(ctx):
     guild_id = ctx.guild.id
     
     # Получаем все данные
-    users = await bot.db.get_all_users(guild_id)
+    users = await db.get_leaderboard(guild_id, 1000)  # Получаем до 1000 пользователей
     
     # Формируем CSV
     csv_data = "ID пользователя,Ник,Поинты,Позиция\n"
@@ -1510,12 +1512,16 @@ async def export_command(ctx):
         csv_data += f"{user['user_id']},{username},{user['points']},{i}\n"
     
     # Создаем файл
-    with open(f'export_{guild_id}.csv', 'w', encoding='utf-8') as f:
+    filename = f"export_{guild_id}_{int(datetime.now().timestamp())}.csv"
+    with open(filename, 'w', encoding='utf-8') as f:
         f.write(csv_data)
     
     # Отправляем файл
-    file = discord.File(f'export_{guild_id}.csv')
-    await ctx.send("📁 Экспорт данных о поинтах:", file=file)
+    file = discord.File(filename)
+    await safe_send(ctx, "📁 Экспорт данных о поинтах:", file=file)
+    
+    # Удаляем временный файл
+    os.remove(filename)
 
 @bot.command(name='raid')
 @is_admin()
@@ -1534,12 +1540,12 @@ async def raid_command(ctx, clan: str, link: str):
             description="Мне нужны права на упоминание @everyone для этой команды!",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     # Проверяем валидность ссылки
     if not link.startswith(('http://', 'https://', 'discord.gg/')):
-        await ctx.send("❌ Ссылка должна начинаться с http://, https:// или discord.gg/")
+        await safe_send(ctx, "❌ Ссылка должна начинаться с http://, https:// или discord.gg/")
         return
     
     # Создаем оповещение
@@ -1567,7 +1573,7 @@ async def raid_command(ctx, clan: str, link: str):
     )
     
     # Отправляем с упоминанием everyone
-    await ctx.send(content="@everyone", embed=embed)
+    await safe_send(ctx, content="@everyone", embed=embed)
     
     # Отправляем подтверждение автору
     confirm_embed = discord.Embed(
@@ -1575,36 +1581,7 @@ async def raid_command(ctx, clan: str, link: str):
         description=f"Клан: **{clan}**\nСсылка: {link}",
         color=COLORS['success']
     )
-    await ctx.send(embed=confirm_embed)
-
-@bot.command(name='sync')
-@commands.is_owner()
-async def sync_command(ctx):
-    """Синхронизировать команды (только для владельца бота)"""
-    try:
-        synced = await bot.tree.sync()
-        
-        embed = discord.Embed(
-            title="✅ Синхронизация команд",
-            description=f"Успешно синхронизировано {len(synced)} команд:",
-            color=COLORS['success']
-        )
-        
-        # Список команд
-        commands_list = "\n".join([f"• `/{cmd.name}` - {cmd.description}" for cmd in synced])
-        embed.add_field(name="Доступные команды", value=commands_list[:1024], inline=False)
-        
-        await ctx.send(embed=embed)
-        logger.info(f"Синхронизировано {len(synced)} команд по запросу {ctx.author}")
-        
-    except Exception as e:
-        embed = discord.Embed(
-            title="❌ Ошибка синхронизации",
-            description=str(e),
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-        logger.error(f"Ошибка синхронизации: {e}")
+    await safe_send(ctx, embed=confirm_embed)
 
 @bot.command(name='unlock')
 @is_admin()
@@ -1625,7 +1602,7 @@ async def unlock_command(ctx):
                 description=f"Роль с ID `{TARGET_ROLE_ID}` не найдена на сервере!",
                 color=COLORS['error']
             )
-            await ctx.send(embed=embed)
+            await safe_send(ctx, embed=embed)
             return
     
     embed = discord.Embed(
@@ -1637,7 +1614,9 @@ async def unlock_command(ctx):
     embed.add_field(name="ID роли", value=f"`{TARGET_ROLE_ID}`", inline=True)
     embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
     
-    message = await ctx.send(embed=embed)
+    message = await safe_send(ctx, embed=embed)
+    if not message:
+        return
     
     # Разблокируем каналы
     results = await unlock_all_channels_in_list(ctx.guild, target_role)
@@ -1680,7 +1659,7 @@ async def unlock_command(ctx):
         inline=True
     )
     
-    await message.edit(embed=final_embed)
+    await safe_edit(message, embed=final_embed)
 
 @bot.command(name='lock')
 @is_admin()
@@ -1704,7 +1683,7 @@ async def lock_command(ctx, lock_type: str = "send"):
             description=f"Доступные типы: {', '.join(lock_types)}",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     # Получаем роль по ID
@@ -1719,7 +1698,7 @@ async def lock_command(ctx, lock_type: str = "send"):
                 description=f"Роль с ID `{TARGET_ROLE_ID}` не найдена на сервере!",
                 color=COLORS['error']
             )
-            await ctx.send(embed=embed)
+            await safe_send(ctx, embed=embed)
             return
     
     embed = discord.Embed(
@@ -1739,7 +1718,9 @@ async def lock_command(ctx, lock_type: str = "send"):
     embed.add_field(name="ID роли", value=f"`{TARGET_ROLE_ID}`", inline=True)
     embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
     
-    message = await ctx.send(embed=embed)
+    message = await safe_send(ctx, embed=embed)
+    if not message:
+        return
     
     # Блокируем каналы
     results = await lock_all_channels_in_list(ctx.guild, target_role, lock_type.lower())
@@ -1791,7 +1772,7 @@ async def lock_command(ctx, lock_type: str = "send"):
     
     final_embed.set_footer(text=f"Тип блокировки: {lock_type.upper()}")
     
-    await message.edit(embed=final_embed)
+    await safe_edit(message, embed=final_embed)
 
 @bot.command(name='addpoints_multi')
 @is_admin()
@@ -1803,7 +1784,7 @@ async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: s
             description="Количество поинтов должно быть положительным!",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     if len(members) == 0:
@@ -1812,7 +1793,7 @@ async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: s
             description="Не указаны пользователи!",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     if len(members) > 25:
@@ -1821,7 +1802,7 @@ async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: s
             description="Можно выдать поинты максимум 25 пользователям за раз!",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed)
+        await safe_send(ctx, embed=embed)
         return
     
     # Отправляем начальное сообщение
@@ -1833,7 +1814,9 @@ async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: s
     embed.add_field(name="Количество поинтов", value=f"**{amount}** каждому", inline=True)
     embed.add_field(name="Причина", value=reason, inline=True)
     
-    message = await ctx.send(embed=embed)
+    message = await safe_send(ctx, embed=embed)
+    if not message:
+        return
     
     # Выдаем поинты
     results = []
@@ -1905,13 +1888,12 @@ async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: s
             
             # Отправляем файл
             file = discord.File(filename)
-            await ctx.send(f"📋 Полные результаты для {len(members)} пользователей:", file=file)
+            await safe_send(ctx, f"📋 Полные результаты для {len(members)} пользователей:", file=file)
             
             # Удаляем временный файл
-            import os
             os.remove(filename)
     
-    await message.edit(embed=final_embed)
+    await safe_edit(message, embed=final_embed)
 
 @bot.command(name='help')
 async def help_command(ctx):
@@ -1997,7 +1979,40 @@ async def help_command(ctx):
         inline=False
     )
     
-    await ctx.send(embed=embed)
+    await safe_send(ctx, embed=embed)
+
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ БЕЗОПАСНОЙ ОТПРАВКИ СООБЩЕНИЙ ==========
+
+async def safe_send(ctx, content=None, embed=None, file=None, view=None):
+    """Безопасная отправка сообщения с обработкой ошибок прав"""
+    try:
+        if file:
+            return await ctx.send(content=content, embed=embed, file=file, view=view)
+        else:
+            return await ctx.send(content=content, embed=embed, view=view)
+    except discord.Forbidden:
+        # Нет прав на отправку сообщений в этом канале
+        try:
+            # Пробуем отправить в ЛС автору
+            await ctx.author.send("❌ У меня нет прав на отправку сообщений в том канале, где вы использовали команду!")
+        except:
+            # Если и в ЛС не могу отправить, просто логируем
+            logger.error(f"Не могу отправить сообщение пользователю {ctx.author} (нет прав в канале и ЛС)")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка при отправке сообщения: {e}")
+        return None
+
+async def safe_edit(message, content=None, embed=None, view=None):
+    """Безопасное редактирование сообщения"""
+    try:
+        return await message.edit(content=content, embed=embed, view=view)
+    except discord.Forbidden:
+        logger.error("Нет прав на редактирование сообщения")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+        return None
 
 # ========== ОБРАБОТКА ОШИБОК ==========
 
@@ -2005,44 +2020,78 @@ async def help_command(ctx):
 async def on_command_error(ctx, error):
     """Обработка ошибок команд"""
     
-    if isinstance(error, commands.CheckFailure):
-        # Преобразуем ID ролей в строки для отображения
-        admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
-        
-        embed = discord.Embed(
-            title="❌ Недостаточно прав",
-            description=f"Только роли с ID: **{admin_role_ids_str}** могут использовать эту команду!",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-        
-    elif isinstance(error, commands.MissingRequiredArgument):
-        embed = discord.Embed(
-            title="❌ Не хватает аргументов",
-            description=f"Используйте `{PREFIX}help` для справки по командам",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-        
-    elif isinstance(error, commands.BadArgument):
-        embed = discord.Embed(
-            title="❌ Неправильные аргументы",
-            description="Проверьте правильность введенных данных",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-        
-    elif isinstance(error, commands.CommandNotFound):
-        pass  # Игнорируем
-        
-    else:
-        logger.error(f"Необработанная ошибка команды: {error}")
-        embed = discord.Embed(
-            title="❌ Неизвестная ошибка",
-            description="Произошла неизвестная ошибка.",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
+    # Игнорируем команды, которые не найдены
+    if isinstance(error, commands.CommandNotFound):
+        return
+    
+    # Проверяем, можем ли мы отправить сообщение об ошибке
+    if not ctx.channel.permissions_for(ctx.guild.me).send_messages:
+        # Нет прав на отправку сообщений - просто логируем
+        logger.error(f"Ошибка команды в канале без прав на отправку: {error}")
+        return
+    
+    try:
+        if isinstance(error, commands.CheckFailure):
+            # Преобразуем ID ролей в строки для отображения
+            admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
+            
+            embed = discord.Embed(
+                title="❌ Недостаточно прав",
+                description=f"Только пользователи с административными правами или ролями с ID: **{admin_role_ids_str}** могут использовать эту команду!",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            
+        elif isinstance(error, commands.MissingRequiredArgument):
+            embed = discord.Embed(
+                title="❌ Не хватает аргументов",
+                description=f"Используйте `{PREFIX}help` для справки по командам",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            
+        elif isinstance(error, commands.BadArgument):
+            embed = discord.Embed(
+                title="❌ Неправильные аргументы",
+                description="Проверьте правильность введенных данных",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            
+        elif isinstance(error, commands.TooManyArguments):
+            embed = discord.Embed(
+                title="❌ Слишком много аргументов",
+                description=f"Используйте `{PREFIX}help` для справки по командам",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            
+        elif isinstance(error, commands.CommandOnCooldown):
+            embed = discord.Embed(
+                title="⏳ Команда на перезарядке",
+                description=f"Попробуйте снова через {error.retry_after:.1f} секунд",
+                color=COLORS['warning']
+            )
+            await safe_send(ctx, embed=embed)
+            
+        else:
+            logger.error(f"Необработанная ошибка команды {ctx.command}: {error}")
+            
+            # Для некоторых ошибок не нужно показывать пользователю
+            if isinstance(error, discord.Forbidden):
+                # Ошибка прав - уже обработана в safe_send
+                pass
+            else:
+                embed = discord.Embed(
+                    title="❌ Неизвестная ошибка",
+                    description="Произошла неизвестная ошибка. Администратор уже уведомлен.",
+                    color=COLORS['error']
+                )
+                await safe_send(ctx, embed=embed)
+                
+    except Exception as e:
+        # Предотвращаем бесконечный цикл ошибок в обработчике ошибок
+        logger.error(f"Критическая ошибка в обработчике ошибок: {e}")
 
 # ========== ЗАПУСК БОТА ==========
 
