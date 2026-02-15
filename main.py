@@ -602,7 +602,7 @@ async def lock_all_channels_in_list(guild: discord.Guild, role: discord.Role, lo
         channels_list = await db.get_channel_list(guild.id)
         
         if not channels_list:
-            return ["❌ Список каналов пуст. Добавьте каналы с помощью /addchannel"]
+            return ["❌ Список каналов пуст. Добавьте каналы с помощью !addchannel"]
         
         for channel_data in channels_list:
             try:
@@ -712,27 +712,13 @@ async def on_ready():
         )
     )
     
-    # Синхронизация slash команд с задержкой
-    try:
-        await asyncio.sleep(5)  # Ждем 5 секунд
-        synced = await bot.tree.sync()
-        logger.info(f'✅ Синхронизировано {len(synced)} команд')
-    except Exception as e:
-        logger.error(f'❌ Ошибка синхронизации команд: {e}')
-    
     logger.info("🚀 Бот полностью готов к работе!")
 
-# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ СПИСКОМ КАНАЛОВ ==========
+# ========== КОМАНДЫ ==========
 
-@bot.hybrid_command(
-    name='addchannel',
-    description='Добавить канал в список для блокировки'
-)
+@bot.command(name='addchannel')
 @is_admin()
-async def add_channel(
-    ctx,
-    channel: discord.TextChannel
-):
+async def add_channel(ctx, channel: discord.TextChannel):
     """Добавить канал в список для блокировки"""
     success = await db.add_channel_to_list(
         ctx.guild.id, channel.id, channel.name, ctx.author.id
@@ -760,15 +746,9 @@ async def add_channel(
     
     await ctx.send(embed=embed)
 
-@bot.hybrid_command(
-    name='removechannel',
-    description='Удалить канал из списка для блокировки'
-)
+@bot.command(name='removechannel')
 @is_admin()
-async def remove_channel(
-    ctx,
-    channel: Optional[discord.TextChannel] = None
-):
+async def remove_channel(ctx, channel: Optional[discord.TextChannel] = None):
     """Удалить канал из списка для блокировки"""
     if channel:
         success = await db.remove_channel_from_list(ctx.guild.id, channel.id)
@@ -842,10 +822,7 @@ async def remove_channel(
     
     await ctx.send(embed=embed)
 
-@bot.hybrid_command(
-    name='listchannels',
-    description='Показать список каналов для блокировки'
-)
+@bot.command(name='listchannels')
 @is_admin()
 async def list_channels(ctx):
     """Показать список каналов для блокировки"""
@@ -854,7 +831,7 @@ async def list_channels(ctx):
     if not channels:
         embed = discord.Embed(
             title="📋 Список каналов пуст",
-            description="Добавьте каналы с помощью `/addchannel #канал`",
+            description="Добавьте каналы с помощью `!addchannel #канал`",
             color=COLORS['info']
         )
         await ctx.send(embed=embed)
@@ -890,18 +867,9 @@ async def list_channels(ctx):
     
     await ctx.send(embed=embed)
 
-# ========== КОМАНДЫ ДЛЯ БЛОКИРОВКИ КАНАЛОВ ==========
-
-@bot.hybrid_command(
-    name='lockchannels',
-    description='Заблокировать все каналы из списка для роли'
-)
+@bot.command(name='lockchannels')
 @is_admin()
-async def lock_channels(
-    ctx,
-    role: discord.Role,
-    lock_type: str = "send"
-):
+async def lock_channels(ctx, role: discord.Role, lock_type: str = "send"):
     """
     Заблокировать все каналы из списка для роли
     
@@ -990,15 +958,9 @@ async def lock_channels(
     
     await message.edit(embed=final_embed)
 
-@bot.hybrid_command(
-    name='unlockchannels',
-    description='Разблокировать все каналы из списка для роли'
-)
+@bot.command(name='unlockchannels')
 @is_admin()
-async def unlock_channels(
-    ctx,
-    role: Optional[discord.Role] = None
-):
+async def unlock_channels(ctx, role: Optional[discord.Role] = None):
     """Разблокировать все каналы из списка для роли или полностью"""
     if role:
         embed = discord.Embed(
@@ -1057,10 +1019,7 @@ async def unlock_channels(
     
     await message.edit(embed=final_embed)
 
-@bot.hybrid_command(
-    name='clearlocks',
-    description='Удалить все блокировки на сервере'
-)
+@bot.command(name='clearlocks')
 @is_admin()
 async def clear_locks(ctx):
     """Удалить все блокировки на сервере"""
@@ -1139,10 +1098,7 @@ async def clear_locks(ctx):
     
     await ctx.send(embed=embed, view=view)
 
-@bot.hybrid_command(
-    name='lockinfo',
-    description='Показать информацию о блокировках'
-)
+@bot.command(name='lockinfo')
 @is_admin()
 async def lock_info(ctx):
     """Показать информацию о блокировках"""
@@ -1215,23 +1171,15 @@ async def lock_info(ctx):
     )
     
     if len(roles_dict) > 5:
-        embed.set_footer(text=f"Показано 5 из {len(roles_dict)} ролей. Используйте /listchannels для полного списка")
+        embed.set_footer(text=f"Показано 5 из {len(roles_dict)} ролей. Используйте !listchannels для полного списка")
     
     await ctx.send(embed=embed)
 
 # ========== КОМАНДЫ ДЛЯ ПОИНТОВ ==========
 
-@bot.hybrid_command(
-    name='addpoints',
-    description='Выдать поинты пользователю'
-)
+@bot.command(name='addpoints')
 @is_admin()
-async def add_points(
-    ctx,
-    member: discord.Member,
-    amount: int,
-    reason: str = "Выдано админом"
-):
+async def add_points(ctx, member: discord.Member, amount: int, *, reason: str = "Выдано админом"):
     """Выдать поинты пользователю"""
     if amount <= 0:
         embed = discord.Embed(
@@ -1260,17 +1208,9 @@ async def add_points(
     # Проверяем и выдаем роли
     await check_and_assign_roles(member)
 
-@bot.hybrid_command(
-    name='removepoints',
-    description='Забрать поинты у пользователя'
-)
+@bot.command(name='removepoints')
 @is_admin()
-async def remove_points(
-    ctx,
-    member: discord.Member,
-    amount: int,
-    reason: str = "Изъято админом"
-):
+async def remove_points(ctx, member: discord.Member, amount: int, *, reason: str = "Изъято админом"):
     """Забрать поинты у пользователя"""
     if amount <= 0:
         embed = discord.Embed(
@@ -1299,17 +1239,9 @@ async def remove_points(
     # Проверяем и обновляем роли
     await check_and_assign_roles(member)
 
-@bot.hybrid_command(
-    name='setpoints',
-    description='Установить точное количество поинтов'
-)
+@bot.command(name='setpoints')
 @is_admin()
-async def set_points(
-    ctx,
-    member: discord.Member,
-    amount: int,
-    reason: str = "Установлено админом"
-):
+async def set_points(ctx, member: discord.Member, amount: int, *, reason: str = "Установлено админом"):
     """Установить точное количество поинтов"""
     if amount < 0:
         embed = discord.Embed(
@@ -1337,10 +1269,7 @@ async def set_points(
     # Проверяем и выдаем роли
     await check_and_assign_roles(member)
 
-@bot.hybrid_command(
-    name='resetpoints',
-    description='Сбросить все поинты на сервере'
-)
+@bot.command(name='resetpoints')
 @is_admin()
 async def reset_points(ctx):
     """Сбросить все поинты на сервере"""
@@ -1391,10 +1320,7 @@ async def reset_points(ctx):
     
     await ctx.send(embed=embed, view=view)
 
-@bot.hybrid_command(
-    name='points',
-    description='Проверить свои поинты или поинты другого пользователя'
-)
+@bot.command(name='points')
 async def check_points(ctx, member: Optional[discord.Member] = None):
     """Проверить поинты"""
     if member is None:
@@ -1456,12 +1382,9 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     
     await ctx.send(embed=embed)
 
-@bot.hybrid_command(
-    name='leaderboard',
-    description='Таблица лидеров по поинтам'
-)
+@bot.command(name='leaderboard')
 async def leaderboard(ctx, page: int = 1):
-    """Таблица лидеров"""
+    """Таблица лидеров по поинтам"""
     guild_id = ctx.guild.id
     
     # Получаем лидерборд из базы
@@ -1524,10 +1447,7 @@ async def leaderboard(ctx, page: int = 1):
     
     await ctx.send(embed=embed)
 
-@bot.hybrid_command(
-    name='roles',
-    description='Показать систему ролей'
-)
+@bot.command(name='roles')
 async def show_roles(ctx):
     """Показать систему ролей"""
     embed = discord.Embed(
@@ -1550,10 +1470,7 @@ async def show_roles(ctx):
     embed.set_footer(text="Админские ID ролей: " + admin_role_ids_str)
     await ctx.send(embed=embed)
 
-@bot.hybrid_command(
-    name='ping',
-    description='Проверить пинг бота'
-)
+@bot.command(name='ping')
 async def ping_command(ctx):
     """Проверить пинг бота"""
     latency = round(bot.latency * 1000)
@@ -1567,15 +1484,14 @@ async def ping_command(ctx):
     embed.add_field(name="Порт веб-сервера", value=f"**{PORT}**", inline=True)
     embed.add_field(name="Статус БД", value="✅ **Подключена**" if hasattr(db, 'pool') and db.pool else "❌ **Отключена**", inline=True)
     embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
-    embed.set_footer(text=f"Эндпоинт для пинга: /ping")
+    embed.set_footer(text=f"Префикс команд: {PREFIX}")
     
     await ctx.send(embed=embed)
 
-
-@bot.hybrid_command(name='export', description='Экспорт данных в CSV')
+@bot.command(name='export')
 @is_admin()
 async def export_command(ctx):
-    """Экспорт данных о поинтах"""
+    """Экспорт данных в CSV"""
     guild_id = ctx.guild.id
     
     # Получаем все данные
@@ -1601,17 +1517,9 @@ async def export_command(ctx):
     file = discord.File(f'export_{guild_id}.csv')
     await ctx.send("📁 Экспорт данных о поинтах:", file=file)
 
-
-@bot.hybrid_command(
-    name='raid',
-    description='Отправить рейд-оповещение'
-)
+@bot.command(name='raid')
 @is_admin()
-async def raid_command(
-    ctx,
-    clan: str,
-    link: str
-):
+async def raid_command(ctx, clan: str, link: str):
     """
     Отправить рейд-оповещение с упоминанием @everyone
     
@@ -1626,12 +1534,12 @@ async def raid_command(
             description="Мне нужны права на упоминание @everyone для этой команды!",
             color=COLORS['error']
         )
-        await ctx.send(embed=embed, ephemeral=True)
+        await ctx.send(embed=embed)
         return
     
     # Проверяем валидность ссылки
     if not link.startswith(('http://', 'https://', 'discord.gg/')):
-        await ctx.send("❌ Ссылка должна начинаться с http://, https:// или discord.gg/", ephemeral=True)
+        await ctx.send("❌ Ссылка должна начинаться с http://, https:// или discord.gg/")
         return
     
     # Создаем оповещение
@@ -1667,16 +1575,12 @@ async def raid_command(
         description=f"Клан: **{clan}**\nСсылка: {link}",
         color=COLORS['success']
     )
-    await ctx.send(embed=confirm_embed, ephemeral=True)
+    await ctx.send(embed=confirm_embed)
 
-
-@bot.hybrid_command(
-    name='sync',
-    description='Синхронизировать команды (только для владельца бота)'
-)
+@bot.command(name='sync')
 @commands.is_owner()
 async def sync_command(ctx):
-    """Синхронизировать слэш-команды"""
+    """Синхронизировать команды (только для владельца бота)"""
     try:
         synced = await bot.tree.sync()
         
@@ -1702,14 +1606,10 @@ async def sync_command(ctx):
         await ctx.send(embed=embed)
         logger.error(f"Ошибка синхронизации: {e}")
 
-
-@bot.hybrid_command(
-    name='unlock',
-    description='Разблокировать все каналы из списка для конкретной роли'
-)
+@bot.command(name='unlock')
 @is_admin()
 async def unlock_command(ctx):
-    """Разблокировать все каналы из списка для роли 1431589898183512129"""
+    """Разблокировать все каналы из списка для конкретной роли"""
     # ID конкретной роли
     TARGET_ROLE_ID = 1431589898183512129
     
@@ -1782,17 +1682,9 @@ async def unlock_command(ctx):
     
     await message.edit(embed=final_embed)
 
-
-
-@bot.hybrid_command(
-    name='lock',
-    description='Заблокировать все каналы из списка для конкретной роли'
-)
+@bot.command(name='lock')
 @is_admin()
-async def lock_command(
-    ctx,
-    lock_type: str = "send"
-):
+async def lock_command(ctx, lock_type: str = "send"):
     """
     Заблокировать все каналы из списка для роли 1431589898183512129
     
@@ -1901,18 +1793,9 @@ async def lock_command(
     
     await message.edit(embed=final_embed)
 
-
-@bot.hybrid_command(
-    name='addpoints_multi',
-    description='Выдать поинты нескольким пользователям сразу'
-)
+@bot.command(name='addpoints_multi')
 @is_admin()
-async def add_points_multi(
-    ctx,
-    members: commands.Greedy[discord.Member],
-    amount: int,
-    reason: str = "Выдано админом"
-):
+async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: str = "Выдано админом"):
     """Выдать поинты нескольким пользователям сразу"""
     if amount <= 0:
         embed = discord.Embed(
@@ -2030,12 +1913,7 @@ async def add_points_multi(
     
     await message.edit(embed=final_embed)
 
-
-
-@bot.hybrid_command(
-    name='help',
-    description='Показать все команды'
-)
+@bot.command(name='help')
 async def help_command(ctx):
     """Показать все команды"""
     # Проверяем, является ли пользователь админом
@@ -2051,18 +1929,18 @@ async def help_command(ctx):
     
     embed = discord.Embed(
         title="Помощь по командам",
-        description=f"Префикс команд: `{PREFIX}`\nБот также поддерживает slash-команды (/)",
+        description=f"Префикс команд: `{PREFIX}`\nВсе команды начинаются с префикса `{PREFIX}`",
         color=COLORS['info']
     )
     
     # Команды для всех
     embed.add_field(
         name="👤 Команды для всех",
-        value="• `/points [@пользователь]` - Проверить поинты\n"
-              "• `/leaderboard [страница]` - Таблица лидеров\n"
-              "• `/roles` - Система ролей\n"
-              "• `/ping` - Проверить статус бота\n"
-              "• `/help` - Эта справка",
+        value=f"• `{PREFIX}points [@пользователь]` - Проверить поинты\n"
+              f"• `{PREFIX}leaderboard [страница]` - Таблица лидеров\n"
+              f"• `{PREFIX}roles` - Система ролей\n"
+              f"• `{PREFIX}ping` - Проверить статус бота\n"
+              f"• `{PREFIX}help` - Эта справка",
         inline=False
     )
     
@@ -2070,23 +1948,24 @@ async def help_command(ctx):
     if is_user_admin:
         embed.add_field(
             name="👑 Команды для админов (поинты)",
-            value="• `/addpoints @пользователь количество [причина]` - Выдать поинты\n"
-                  "• `/removepoints @пользователь количество [причина]` - Забрать поинты\n"
-                  "• `/setpoints @пользователь количество [причина]` - Установить поинты\n"
-                  "• `/resetpoints` - Сбросить все поинты",
+            value=f"• `{PREFIX}addpoints @пользователь количество [причина]` - Выдать поинты\n"
+                  f"• `{PREFIX}removepoints @пользователь количество [причина]` - Забрать поинты\n"
+                  f"• `{PREFIX}setpoints @пользователь количество [причина]` - Установить поинты\n"
+                  f"• `{PREFIX}resetpoints` - Сбросить все поинты\n"
+                  f"• `{PREFIX}addpoints_multi количество @пользователь1 @пользователь2 ... [причина]` - Массовая выдача",
             inline=False
         )
         
         # Команды для админов (блокировка каналов)
         embed.add_field(
             name="🔒 Команды для блокировки каналов",
-            value="• `/addchannel #канал` - Добавить канал в список\n"
-                  "• `/removechannel [#канал]` - Удалить канал из списка\n"
-                  "• `/listchannels` - Показать список каналов\n"
-                  "• `/lockchannels @роль [тип]` - Заблокировать каналы\n"
-                  "• `/unlockchannels [@роль]` - Разблокировать каналы\n"
-                  "• `/lockinfo` - Показать активные блокировки\n"
-                  "• `/clearlocks` - Удалить все блокировки",
+            value=f"• `{PREFIX}addchannel #канал` - Добавить канал в список\n"
+                  f"• `{PREFIX}removechannel [#канал]` - Удалить канал из списка\n"
+                  f"• `{PREFIX}listchannels` - Показать список каналов\n"
+                  f"• `{PREFIX}lockchannels @роль [тип]` - Заблокировать каналы\n"
+                  f"• `{PREFIX}unlockchannels [@роль]` - Разблокировать каналы\n"
+                  f"• `{PREFIX}lockinfo` - Показать активные блокировки\n"
+                  f"• `{PREFIX}clearlocks` - Удалить все блокировки",
             inline=False
         )
         
@@ -2095,6 +1974,13 @@ async def help_command(ctx):
             value="• `send` - запрет писать и прикреплять файлы\n"
                   "• `view` - скрытие канала\n"
                   "• `both` - полная блокировка",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="⚡ Быстрые команды для роли 1431589898183512129",
+            value=f"• `{PREFIX}lock [тип]` - Заблокировать каналы для роли\n"
+                  f"• `{PREFIX}unlock` - Разблокировать каналы для роли",
             inline=False
         )
     
@@ -2113,88 +1999,50 @@ async def help_command(ctx):
     
     await ctx.send(embed=embed)
 
-
 # ========== ОБРАБОТКА ОШИБОК ==========
 
 @bot.event
 async def on_command_error(ctx, error):
     """Обработка ошибок команд"""
     
-    # Проверяем, является ли это slash-командой (есть interaction)
-    is_slash_command = hasattr(ctx, 'interaction') and ctx.interaction is not None
-    
-    try:
-        if isinstance(error, commands.CheckFailure):
-            # Преобразуем ID ролей в строки для отображения
-            admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
-            
-            embed = discord.Embed(
-                title="❌ Недостаточно прав",
-                description=f"Только роли с ID: **{admin_role_ids_str}** могут использовать эту команду!",
-                color=COLORS['error']
-            )
-            
-            if is_slash_command:
-                # Для slash-команд используем interaction
-                if not ctx.interaction.response.is_done():
-                    await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
-                else:
-                    await ctx.interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                # Для префиксных команд используем ctx.send
-                await ctx.send(embed=embed)
-                
-        elif isinstance(error, commands.MissingRequiredArgument):
-            embed = discord.Embed(
-                title="❌ Не хватает аргументов",
-                description=f"Используйте `{PREFIX}help` для справки по командам",
-                color=COLORS['error']
-            )
-            
-            if is_slash_command:
-                if not ctx.interaction.response.is_done():
-                    await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
-                else:
-                    await ctx.interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                await ctx.send(embed=embed)
-                
-        elif isinstance(error, commands.BadArgument):
-            embed = discord.Embed(
-                title="❌ Неправильные аргументы",
-                description="Проверьте правильность введенных данных",
-                color=COLORS['error']
-            )
-            
-            if is_slash_command:
-                if not ctx.interaction.response.is_done():
-                    await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
-                else:
-                    await ctx.interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                await ctx.send(embed=embed)
-                
-        elif isinstance(error, commands.CommandNotFound):
-            pass  # Игнорируем
-            
-        else:
-            logger.error(f"Необработанная ошибка команды: {error}")
-            embed = discord.Embed(
-                title="❌ Неизвестная ошибка",
-                description="Произошла неизвестная ошибка.",
-                color=COLORS['error']
-            )
-            
-            if is_slash_command:
-                if not ctx.interaction.response.is_done():
-                    await ctx.interaction.response.send_message(embed=embed, ephemeral=True)
-                else:
-                    await ctx.interaction.followup.send(embed=embed, ephemeral=True)
-            else:
-                await ctx.send(embed=embed)
-                
-    except Exception as e:
-        logger.error(f"Ошибка при обработке ошибки команды: {e}")
+    if isinstance(error, commands.CheckFailure):
+        # Преобразуем ID ролей в строки для отображения
+        admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
+        
+        embed = discord.Embed(
+            title="❌ Недостаточно прав",
+            description=f"Только роли с ID: **{admin_role_ids_str}** могут использовать эту команду!",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        
+    elif isinstance(error, commands.MissingRequiredArgument):
+        embed = discord.Embed(
+            title="❌ Не хватает аргументов",
+            description=f"Используйте `{PREFIX}help` для справки по командам",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        
+    elif isinstance(error, commands.BadArgument):
+        embed = discord.Embed(
+            title="❌ Неправильные аргументы",
+            description="Проверьте правильность введенных данных",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        
+    elif isinstance(error, commands.CommandNotFound):
+        pass  # Игнорируем
+        
+    else:
+        logger.error(f"Необработанная ошибка команды: {error}")
+        embed = discord.Embed(
+            title="❌ Неизвестная ошибка",
+            description="Произошла неизвестная ошибка.",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
 
 # ========== ЗАПУСК БОТА ==========
 
