@@ -9,6 +9,7 @@ import asyncpg
 import asyncio
 from aiohttp import web
 import socket
+import time
 
 # Настройка логирования
 logging.basicConfig(
@@ -74,60 +75,6 @@ ROLE_COLORS = {
     'raider legend': discord.Color.purple(),
     'raider commander': discord.Color.gold()
 }
-
-# ========== ВЕБ-СЕРВЕР ДЛЯ RENDER ==========
-
-async def handle_root(request):
-    """Обработчик корневого пути"""
-    return web.Response(text="🤖 Discord Points Bot is running!\n"
-                           "📊 Status: Online\n"
-                           f"⏰ Uptime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                           f"🔗 GitHub: https://github.com\n"
-                           "📞 Support: Available")
-
-async def handle_ping(request):
-    """Обработчик пинга"""
-    return web.Response(text="pong")
-
-async def handle_health(request):
-    """Обработчик health check"""
-    return web.json_response({
-        "status": "healthy",
-        "timestamp": datetime.now().isoformat(),
-        "service": "discord-points-bot",
-        "bot_status": "online" if bot.is_ready() else "starting",
-        "guild_count": len(bot.guilds) if bot.is_ready() else 0,
-        "database": "connected" if hasattr(db, 'pool') and db.pool else "disconnected"
-    })
-
-async def start_web_server():
-    """Запуск веб-сервера"""
-    try:
-        app = web.Application()
-        
-        # Добавляем маршруты
-        app.router.add_get('/', handle_root)
-        app.router.add_get('/ping', handle_ping)
-        app.router.add_get('/health', handle_health)
-        
-        # Запускаем сервер
-        runner = web.AppRunner(app)
-        await runner.setup()
-        
-        # Используем порт из переменных окружения
-        site = web.TCPSite(runner, '0.0.0.0', PORT)
-        await site.start()
-        
-        logger.info(f"🌐 Веб-сервер запущен на порту {PORT}")
-        logger.info(f"📡 Доступные эндпоинты:")
-        logger.info(f"   http://0.0.0.0:{PORT}/")
-        logger.info(f"   http://0.0.0.0:{PORT}/ping")
-        logger.info(f"   http://0.0.0.0:{PORT}/health")
-        
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка запуска веб-сервера: {e}")
-        return False
 
 # ========== БАЗА ДАННЫХ ==========
 
@@ -199,7 +146,7 @@ class Database:
                 )
             ''')
             
-            logger.info("✅ Таблицы инициализированы")
+            logger.info("✅ Таблицы пользователей и каналов инициализированы")
     
     async def get_user_points(self, user_id: int, guild_id: int) -> int:
         """Получить количество поинтов пользователя"""
@@ -613,9 +560,79 @@ class ClanManager:
         return emojis.get(clan_type, '📌')
 
 
-# Создаем экземпляры
+# Создаем экземпляр БД
 db = Database()
-clan_manager = ClanManager(db.pool)
+# ClanManager будет инициализирован после подключения к БД
+clan_manager = None
+
+# ========== ВЕБ-СЕРВЕР ДЛЯ RENDER ==========
+
+async def handle_root(request):
+    """Обработчик корневого пути"""
+    return web.Response(
+        text="✅ Discord Points Bot is running!\n"
+             f"📊 Status: Online\n"
+             f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+             f"🌐 Port: {PORT}\n"
+             f"🔄 Bot is ready to accept commands!"
+    )
+
+async def handle_ping(request):
+    """Обработчик пинга"""
+    return web.Response(text="pong")
+
+async def handle_health(request):
+    """Обработчик health check"""
+    status = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "discord-points-bot",
+        "port": PORT,
+        "bot_ready": bot.is_ready()
+    }
+    
+    # Добавляем информацию о БД если доступна
+    if hasattr(db, 'pool') and db.pool:
+        status["database"] = "connected"
+    else:
+        status["database"] = "connecting"
+    
+    return web.json_response(status)
+
+async def start_web_server():
+    """Запуск веб-сервера"""
+    try:
+        app = web.Application()
+        
+        # Добавляем маршруты
+        app.router.add_get('/', handle_root)
+        app.router.add_get('/ping', handle_ping)
+        app.router.add_get('/health', handle_health)
+        
+        # Запускаем сервер на ВСЕХ интерфейсах
+        runner = web.AppRunner(app)
+        await runner.setup()
+        
+        # ВАЖНО: слушаем на 0.0.0.0, а не на localhost
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        
+        logger.info(f"🌐 Веб-сервер успешно запущен на порту {PORT}")
+        logger.info(f"📡 Сервер слушает на 0.0.0.0:{PORT}")
+        
+        # Проверяем, что сервер действительно слушает
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        result = sock.connect_ex(('127.0.0.1', PORT))
+        if result == 0:
+            logger.info(f"✅ Порт {PORT} открыт и доступен")
+        else:
+            logger.warning(f"⚠️ Порт {PORT} может быть недоступен (код: {result})")
+        sock.close()
+        
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска веб-сервера: {e}")
+        return False
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С РОЛЯМИ ==========
 
@@ -877,32 +894,36 @@ async def unlock_all_channels_in_list(guild: discord.Guild, role: discord.Role =
 async def on_ready():
     """Событие при запуске бота"""
     logger.info(f'✅ Бот {bot.user} запущен!')
-    
-    # Ожидаем полную загрузку
-    await bot.wait_until_ready()
-    
     logger.info(f'📊 Серверов: {len(bot.guilds)}')
     logger.info(f'🌐 Порт веб-сервера: {PORT}')
     
     # Подключаемся к базе данных
     if await db.connect():
-        # Инициализируем таблицы кланов после подключения к БД
+        logger.info("✅ База данных подключена")
+        
+        # Инициализируем ClanManager ПОСЛЕ подключения к БД
+        global clan_manager
+        clan_manager = ClanManager(db.pool)
         await clan_manager.init_tables()
+        logger.info("✅ Менеджер кланов инициализирован")
     else:
         logger.error("❌ Не удалось подключиться к базе данных!")
+        logger.warning("⚠️ Бот будет работать без функций базы данных!")
     
     # Запускаем веб-сервер
-    asyncio.create_task(start_web_server())
+    await start_web_server()
     
     # Устанавливаем статус
+    activity_text = f"{PREFIX}help | {len(bot.guilds)} серв."
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
-            name=f"{PREFIX}help | {len(bot.guilds)} серв."
+            name=activity_text
         )
     )
     
     logger.info("🚀 Бот полностью готов к работе!")
+    logger.info(f"📡 Веб-сервер доступен по адресу: http://0.0.0.0:{PORT}/")
 
 # ========== КОМАНДЫ ==========
 
@@ -1658,7 +1679,7 @@ async def show_roles(ctx):
             inline=True
         )
     
-    admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS)
+    admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
     embed.set_footer(text="Админские ID ролей: " + admin_role_ids_str)
     await safe_send(ctx, embed=embed)
 
@@ -1674,7 +1695,13 @@ async def ping_command(ctx):
     embed.add_field(name="Задержка API", value=f"**{latency}мс**", inline=True)
     embed.add_field(name="Серверов", value=f"**{len(bot.guilds)}**", inline=True)
     embed.add_field(name="Порт веб-сервера", value=f"**{PORT}**", inline=True)
-    embed.add_field(name="Статус БД", value="✅ **Подключена**" if hasattr(db, 'pool') and db.pool else "❌ **Отключена**", inline=True)
+    
+    db_status = "✅ **Подключена**" if hasattr(db, 'pool') and db.pool else "❌ **Отключена**"
+    embed.add_field(name="Статус БД", value=db_status, inline=True)
+    
+    clan_status = "✅ **Готов**" if clan_manager is not None else "⏳ **Инициализация**"
+    embed.add_field(name="Система кланов", value=clan_status, inline=True)
+    
     embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
     embed.set_footer(text=f"Префикс команд: {PREFIX}")
     
@@ -2103,6 +2130,15 @@ async def add_clan(ctx, clan_type: str, name: str, tag: str = None, *, descripti
     !addclan enemy "Враждебный клан" ENMY "Описание врага"
     !addclan peace "Пис клан" PEACE "Нейтральные отношения"
     """
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="❌ Система не готова",
+            description="База данных еще подключается. Попробуйте через несколько секунд.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     # Проверяем тип клана
     valid_types = ['ally', 'enemy', 'peace']
     clan_type = clan_type.lower()
@@ -2165,6 +2201,15 @@ async def remove_clan(ctx, clan_type: str = None, *, name: str):
     !removeclan peace "Название клана" - удалить из нейтральных
     !removeclan "Название клана" - удалить из всех категорий
     """
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="❌ Система не готова",
+            description="База данных еще подключается. Попробуйте через несколько секунд.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     if clan_type and clan_type.lower() not in ['ally', 'enemy', 'peace']:
         # Если clan_type не является допустимым типом, считаем его частью названия
         name = f"{clan_type} {name}"
@@ -2231,16 +2276,43 @@ async def remove_clan(ctx, clan_type: str = None, *, name: str):
 @bot.command(name='allyclans')
 async def ally_clans(ctx):
     """Показать все союзные кланы (ALLY)"""
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="⏳ Загрузка данных",
+            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     await show_clans_by_type(ctx, 'ally', '🤝 Союзные кланы (ALLY)')
 
 @bot.command(name='enemyclans')
 async def enemy_clans(ctx):
     """Показать все вражеские кланы (ENEMY)"""
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="⏳ Загрузка данных",
+            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     await show_clans_by_type(ctx, 'enemy', '⚔️ Вражеские кланы (ENEMY)')
 
 @bot.command(name='peaceclans')
 async def peace_clans(ctx):
     """Показать все нейтральные кланы (PEACE/ПИС)"""
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="⏳ Загрузка данных",
+            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     await show_clans_by_type(ctx, 'peace', '🕊️ Нейтральные кланы (PEACE)')
 
 async def show_clans_by_type(ctx, clan_type: str, title: str):
@@ -2301,6 +2373,15 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
 @bot.command(name='allclans')
 async def all_clans(ctx):
     """Показать все кланы (союзники, враги, нейтральные)"""
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="⏳ Загрузка данных",
+            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     clans = await clan_manager.get_all_clans(ctx.guild.id)
     
     if not clans:
@@ -2319,60 +2400,60 @@ async def all_clans(ctx):
     )
     
     # Группируем по типам
-    ally_clans = [c for c in clans if c['clan_type'] == 'ally']
-    enemy_clans = [c for c in clans if c['clan_type'] == 'enemy']
-    peace_clans = [c for c in clans if c['clan_type'] == 'peace']
+    ally_clans_list = [c for c in clans if c['clan_type'] == 'ally']
+    enemy_clans_list = [c for c in clans if c['clan_type'] == 'enemy']
+    peace_clans_list = [c for c in clans if c['clan_type'] == 'peace']
     
     # Союзники
-    if ally_clans:
+    if ally_clans_list:
         ally_text = []
-        for clan in ally_clans[:10]:  # Показываем не больше 10
+        for clan in ally_clans_list[:10]:  # Показываем не больше 10
             name = clan['name']
             if clan['tag']:
                 name = f"[{clan['tag']}] {name}"
             ally_text.append(f"• {name}")
         
-        if len(ally_clans) > 10:
-            ally_text.append(f"*... и ещё {len(ally_clans) - 10}*")
+        if len(ally_clans_list) > 10:
+            ally_text.append(f"*... и ещё {len(ally_clans_list) - 10}*")
         
         embed.add_field(
-            name=f"🤝 Союзники ({len(ally_clans)})",
+            name=f"🤝 Союзники ({len(ally_clans_list)})",
             value="\n".join(ally_text) if ally_text else "Нет союзников",
             inline=False
         )
     
     # Нейтральные
-    if peace_clans:
+    if peace_clans_list:
         peace_text = []
-        for clan in peace_clans[:10]:
+        for clan in peace_clans_list[:10]:
             name = clan['name']
             if clan['tag']:
                 name = f"[{clan['tag']}] {name}"
             peace_text.append(f"• {name}")
         
-        if len(peace_clans) > 10:
-            peace_text.append(f"*... и ещё {len(peace_clans) - 10}*")
+        if len(peace_clans_list) > 10:
+            peace_text.append(f"*... и ещё {len(peace_clans_list) - 10}*")
         
         embed.add_field(
-            name=f"🕊️ Нейтральные ({len(peace_clans)})",
+            name=f"🕊️ Нейтральные ({len(peace_clans_list)})",
             value="\n".join(peace_text) if peace_text else "Нет нейтральных",
             inline=False
         )
     
     # Враги
-    if enemy_clans:
+    if enemy_clans_list:
         enemy_text = []
-        for clan in enemy_clans[:10]:
+        for clan in enemy_clans_list[:10]:
             name = clan['name']
             if clan['tag']:
                 name = f"[{clan['tag']}] {name}"
             enemy_text.append(f"• {name}")
         
-        if len(enemy_clans) > 10:
-            enemy_text.append(f"*... и ещё {len(enemy_clans) - 10}*")
+        if len(enemy_clans_list) > 10:
+            enemy_text.append(f"*... и ещё {len(enemy_clans_list) - 10}*")
         
         embed.add_field(
-            name=f"⚔️ Враги ({len(enemy_clans)})",
+            name=f"⚔️ Враги ({len(enemy_clans_list)})",
             value="\n".join(enemy_text) if enemy_text else "Нет врагов",
             inline=False
         )
@@ -2402,6 +2483,15 @@ async def clan_info(ctx, clan_type: str, *, name: str):
     !claninfo enemy "Название клана"
     !claninfo peace "Название клана"
     """
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="⏳ Загрузка данных",
+            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     valid_types = ['ally', 'enemy', 'peace']
     clan_type = clan_type.lower()
     
@@ -2471,6 +2561,15 @@ async def edit_clan(ctx, clan_type: str, name: str, field: str, *, value: str):
     !editclan ally "Клан" tag NEWTAG
     !editclan enemy "Клан" desc "Новое описание"
     """
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="❌ Система не готова",
+            description="База данных еще подключается. Попробуйте через несколько секунд.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     valid_types = ['ally', 'enemy', 'peace']
     clan_type = clan_type.lower()
     
@@ -2520,6 +2619,15 @@ async def edit_clan(ctx, clan_type: str, name: str, field: str, *, value: str):
 @is_admin()
 async def clear_clans(ctx):
     """Удалить ВСЕ кланы на сервере"""
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="❌ Система не готова",
+            description="База данных еще подключается. Попробуйте через несколько секунд.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     count = await clan_manager.get_clan_count(ctx.guild.id)
     
     if count == 0:
@@ -2578,6 +2686,15 @@ async def clear_clans(ctx):
 @bot.command(name='searchclan')
 async def search_clan(ctx, *, search_term: str):
     """Поиск клана по названию"""
+    if clan_manager is None:
+        embed = discord.Embed(
+            title="⏳ Загрузка данных",
+            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     clans = await clan_manager.search_clan(ctx.guild.id, search_term)
     
     if not clans:
@@ -2851,12 +2968,25 @@ async def on_command_error(ctx, error):
 # ========== ЗАПУСК БОТА ==========
 
 if __name__ == "__main__":
-    logger.info("🚀 Запуск Discord Points Bot")
+    logger.info("=" * 50)
+    logger.info("🚀 ЗАПУСК DISCORD POINTS BOT")
+    logger.info("=" * 50)
     logger.info(f"🤖 Префикс команд: {PREFIX}")
     logger.info(f"👑 Админские роли: {ADMIN_ROLE_IDS}")
     logger.info(f"🌐 Порт веб-сервера: {PORT}")
-    logger.info("🗄️  Используется база данных PostgreSQL")
-    logger.info("🔄 Бот будет работать 24/7 с веб-сервером для пинга")
+    logger.info(f"🗄️  База данных: PostgreSQL")
+    logger.info("🔄 Режим: 24/7 с веб-сервером")
+    logger.info("=" * 50)
+    
+    # Проверяем доступность порта перед запуском
+    try:
+        test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        test_sock.bind(('0.0.0.0', PORT))
+        test_sock.close()
+        logger.info(f"✅ Порт {PORT} доступен для привязки")
+    except Exception as e:
+        logger.error(f"❌ Порт {PORT} НЕДОСТУПЕН: {e}")
+        logger.warning("⚠️ Бот будет запущен, но веб-сервер может не работать")
     
     try:
         bot.run(TOKEN)
