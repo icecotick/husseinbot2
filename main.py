@@ -427,8 +427,195 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM locked_channels WHERE guild_id = $1', guild_id)
 
-# Создаем экземпляр базы данных
+# ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
+
+class ClanManager:
+    """Класс для управления кланами"""
+    
+    def __init__(self, pool):
+        self.pool = pool
+    
+    async def init_tables(self):
+        """Инициализация таблиц для кланов"""
+        async with self.pool.acquire() as conn:
+            # Таблица кланов
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS clans (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT,
+                    name TEXT NOT NULL,
+                    tag TEXT,
+                    clan_type TEXT NOT NULL CHECK (clan_type IN ('ally', 'enemy', 'peace')),
+                    description TEXT,
+                    added_by BIGINT,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(guild_id, name, clan_type)
+                )
+            ''')
+            
+            logger.info("✅ Таблицы кланов инициализированы")
+    
+    async def add_clan(self, guild_id: int, name: str, clan_type: str, tag: str = None, description: str = None, added_by: int = None):
+        """Добавить клан"""
+        async with self.pool.acquire() as conn:
+            try:
+                # Проверяем, существует ли уже такой клан
+                existing = await conn.fetchrow(
+                    'SELECT * FROM clans WHERE guild_id = $1 AND LOWER(name) = LOWER($2) AND clan_type = $3',
+                    guild_id, name, clan_type
+                )
+                
+                if existing:
+                    return False, f"Клан **{name}** уже существует в категории **{self.get_type_name(clan_type)}**"
+                
+                # Добавляем новый клан
+                await conn.execute('''
+                    INSERT INTO clans (guild_id, name, tag, clan_type, description, added_by)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                ''', guild_id, name, tag, clan_type, description, added_by)
+                
+                return True, f"✅ Клан **{name}** добавлен в категорию **{self.get_type_name(clan_type)}**"
+            except Exception as e:
+                logger.error(f"Ошибка добавления клана: {e}")
+                return False, f"❌ Ошибка при добавлении клана: {str(e)[:100]}"
+    
+    async def remove_clan(self, guild_id: int, name: str, clan_type: str = None):
+        """Удалить клан"""
+        async with self.pool.acquire() as conn:
+            try:
+                if clan_type:
+                    # Удаляем конкретный клан из категории
+                    result = await conn.execute('''
+                        DELETE FROM clans 
+                        WHERE guild_id = $1 AND LOWER(name) = LOWER($2) AND clan_type = $3
+                    ''', guild_id, name, clan_type)
+                    
+                    if result == "DELETE 0":
+                        return False, f"❌ Клан **{name}** не найден в категории **{self.get_type_name(clan_type)}**"
+                    
+                    return True, f"✅ Клан **{name}** удален из категории **{self.get_type_name(clan_type)}**"
+                else:
+                    # Удаляем клан из всех категорий
+                    result = await conn.execute('''
+                        DELETE FROM clans 
+                        WHERE guild_id = $1 AND LOWER(name) = LOWER($2)
+                    ''', guild_id, name)
+                    
+                    if result == "DELETE 0":
+                        return False, f"❌ Клан **{name}** не найден"
+                    
+                    return True, f"✅ Клан **{name}** удален из всех категорий"
+            except Exception as e:
+                logger.error(f"Ошибка удаления клана: {e}")
+                return False, f"❌ Ошибка при удалении клана: {str(e)[:100]}"
+    
+    async def get_clans_by_type(self, guild_id: int, clan_type: str):
+        """Получить все кланы определенного типа"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT * FROM clans 
+                WHERE guild_id = $1 AND clan_type = $2
+                ORDER BY name
+            ''', guild_id, clan_type)
+    
+    async def get_all_clans(self, guild_id: int):
+        """Получить все кланы на сервере"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT * FROM clans 
+                WHERE guild_id = $1
+                ORDER BY 
+                    CASE clan_type
+                        WHEN 'ally' THEN 1
+                        WHEN 'peace' THEN 2
+                        WHEN 'enemy' THEN 3
+                    END,
+                    name
+            ''', guild_id)
+    
+    async def get_clan_count(self, guild_id: int, clan_type: str = None):
+        """Получить количество кланов"""
+        async with self.pool.acquire() as conn:
+            if clan_type:
+                result = await conn.fetchrow(
+                    'SELECT COUNT(*) as count FROM clans WHERE guild_id = $1 AND clan_type = $2',
+                    guild_id, clan_type
+                )
+            else:
+                result = await conn.fetchrow(
+                    'SELECT COUNT(*) as count FROM clans WHERE guild_id = $1',
+                    guild_id
+                )
+            return result['count'] if result else 0
+    
+    async def clear_all_clans(self, guild_id: int):
+        """Удалить все кланы на сервере"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('DELETE FROM clans WHERE guild_id = $1', guild_id)
+    
+    async def search_clan(self, guild_id: int, search_term: str):
+        """Поиск клана по названию"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT * FROM clans 
+                WHERE guild_id = $1 AND LOWER(name) LIKE LOWER($2)
+                ORDER BY 
+                    CASE clan_type
+                        WHEN 'ally' THEN 1
+                        WHEN 'peace' THEN 2
+                        WHEN 'enemy' THEN 3
+                    END,
+                    name
+            ''', guild_id, f'%{search_term}%')
+    
+    async def update_clan_description(self, guild_id: int, name: str, clan_type: str, description: str):
+        """Обновить описание клана"""
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    UPDATE clans 
+                    SET description = $1
+                    WHERE guild_id = $2 AND LOWER(name) = LOWER($3) AND clan_type = $4
+                ''', description, guild_id, name, clan_type)
+                return True, f"✅ Описание клана **{name}** обновлено"
+            except Exception as e:
+                return False, f"❌ Ошибка обновления описания: {str(e)[:100]}"
+    
+    async def update_clan_tag(self, guild_id: int, name: str, clan_type: str, tag: str):
+        """Обновить тег клана"""
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    UPDATE clans 
+                    SET tag = $1
+                    WHERE guild_id = $2 AND LOWER(name) = LOWER($3) AND clan_type = $4
+                ''', tag, guild_id, name, clan_type)
+                return True, f"✅ Тег клана **{name}** обновлен на `[{tag}]`"
+            except Exception as e:
+                return False, f"❌ Ошибка обновления тега: {str(e)[:100]}"
+    
+    def get_type_name(self, clan_type: str):
+        """Получить читаемое название типа клана"""
+        types = {
+            'ally': '🤝 Союзники (ALLY)',
+            'enemy': '⚔️ Враги (ENEMY)',
+            'peace': '🕊️ Нейтральные/Пис (PEACE)'
+        }
+        return types.get(clan_type, clan_type)
+    
+    def get_type_emoji(self, clan_type: str):
+        """Получить эмодзи для типа клана"""
+        emojis = {
+            'ally': '🤝',
+            'enemy': '⚔️',
+            'peace': '🕊️'
+        }
+        return emojis.get(clan_type, '📌')
+
+
+# Создаем экземпляры
 db = Database()
+clan_manager = ClanManager(db.pool)
 
 # ========== ФУНКЦИИ ДЛЯ РАБОТЫ С РОЛЯМИ ==========
 
@@ -698,7 +885,10 @@ async def on_ready():
     logger.info(f'🌐 Порт веб-сервера: {PORT}')
     
     # Подключаемся к базе данных
-    if not await db.connect():
+    if await db.connect():
+        # Инициализируем таблицы кланов после подключения к БД
+        await clan_manager.init_tables()
+    else:
         logger.error("❌ Не удалось подключиться к базе данных!")
     
     # Запускаем веб-сервер
@@ -1895,6 +2085,540 @@ async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: s
     
     await safe_edit(message, embed=final_embed)
 
+# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
+
+@bot.command(name='addclan')
+@is_admin()
+async def add_clan(ctx, clan_type: str, name: str, tag: str = None, *, description: str = None):
+    """
+    Добавить клан в базу данных
+    
+    Типы кланов:
+    - ally - союзники
+    - enemy - враги
+    - peace - нейтральные/пис
+    
+    Примеры:
+    !addclan ally "Название клана" [TAG] [описание]
+    !addclan enemy "Враждебный клан" ENMY "Описание врага"
+    !addclan peace "Пис клан" PEACE "Нейтральные отношения"
+    """
+    # Проверяем тип клана
+    valid_types = ['ally', 'enemy', 'peace']
+    clan_type = clan_type.lower()
+    
+    if clan_type not in valid_types:
+        embed = discord.Embed(
+            title="❌ Неверный тип клана",
+            description=f"Доступные типы: {', '.join(valid_types)}\n"
+                       f"• ally - союзники\n"
+                       f"• enemy - враги\n"
+                       f"• peace - нейтральные/пис",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Добавляем клан
+    success, message = await clan_manager.add_clan(
+        ctx.guild.id, name, clan_type, tag, description, ctx.author.id
+    )
+    
+    if success:
+        embed = discord.Embed(
+            title=f"{clan_manager.get_type_emoji(clan_type)} Клан добавлен",
+            description=message,
+            color=COLORS['success']
+        )
+        
+        embed.add_field(name="🏷️ Название", value=f"**{name}**", inline=True)
+        if tag:
+            embed.add_field(name="📌 Тег", value=f"`[{tag}]`", inline=True)
+        embed.add_field(name="📂 Категория", value=clan_manager.get_type_name(clan_type), inline=True)
+        
+        if description:
+            embed.add_field(name="📝 Описание", value=description, inline=False)
+        
+        embed.add_field(name="👤 Добавил", value=ctx.author.mention, inline=True)
+        
+        # Показываем общее количество
+        count = await clan_manager.get_clan_count(ctx.guild.id)
+        embed.set_footer(text=f"Всего кланов в базе: {count}")
+    else:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=message,
+            color=COLORS['error']
+        )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='removeclan')
+@is_admin()
+async def remove_clan(ctx, clan_type: str = None, *, name: str):
+    """
+    Удалить клан из базы данных
+    
+    Примеры:
+    !removeclan ally "Название клана" - удалить из союзников
+    !removeclan enemy "Название клана" - удалить из врагов
+    !removeclan peace "Название клана" - удалить из нейтральных
+    !removeclan "Название клана" - удалить из всех категорий
+    """
+    if clan_type and clan_type.lower() not in ['ally', 'enemy', 'peace']:
+        # Если clan_type не является допустимым типом, считаем его частью названия
+        name = f"{clan_type} {name}"
+        clan_type = None
+    
+    if clan_type:
+        clan_type = clan_type.lower()
+    
+    # Запрашиваем подтверждение
+    embed = discord.Embed(
+        title="⚠️ Подтверждение удаления",
+        description=f"Вы уверены, что хотите удалить клан **{name}**" + 
+                   (f" из категории **{clan_manager.get_type_name(clan_type)}**?" if clan_type else " из всех категорий?"),
+        color=COLORS['warning']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        # Удаляем клан
+        success, message = await clan_manager.remove_clan(ctx.guild.id, name, clan_type)
+        
+        if success:
+            result_embed = discord.Embed(
+                title="✅ Клан удален",
+                description=message,
+                color=COLORS['success']
+            )
+        else:
+            result_embed = discord.Embed(
+                title="❌ Ошибка",
+                description=message,
+                color=COLORS['error']
+            )
+        
+        await interaction.response.edit_message(embed=result_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Удаление отменено",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='allyclans')
+async def ally_clans(ctx):
+    """Показать все союзные кланы (ALLY)"""
+    await show_clans_by_type(ctx, 'ally', '🤝 Союзные кланы (ALLY)')
+
+@bot.command(name='enemyclans')
+async def enemy_clans(ctx):
+    """Показать все вражеские кланы (ENEMY)"""
+    await show_clans_by_type(ctx, 'enemy', '⚔️ Вражеские кланы (ENEMY)')
+
+@bot.command(name='peaceclans')
+async def peace_clans(ctx):
+    """Показать все нейтральные кланы (PEACE/ПИС)"""
+    await show_clans_by_type(ctx, 'peace', '🕊️ Нейтральные кланы (PEACE)')
+
+async def show_clans_by_type(ctx, clan_type: str, title: str):
+    """Вспомогательная функция для отображения кланов по типу"""
+    clans = await clan_manager.get_clans_by_type(ctx.guild.id, clan_type)
+    
+    if not clans:
+        embed = discord.Embed(
+            title=title,
+            description=f"❌ В этой категории пока нет кланов.\nДобавьте с помощью `!addclan {clan_type} \"название\"`",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title=title,
+        color=COLORS['info']
+    )
+    
+    for clan in clans:
+        # Формируем название с тегом
+        clan_name = clan['name']
+        if clan['tag']:
+            clan_name = f"[{clan['tag']}] {clan_name}"
+        
+        # Информация о клане
+        info = []
+        
+        # Добавляем описание если есть
+        if clan['description']:
+            info.append(f"📝 {clan['description']}")
+        
+        # Добавляем информацию о добавившем
+        try:
+            added_by = await ctx.guild.fetch_member(clan['added_by'])
+            added_by_name = added_by.display_name if added_by else f"ID: {clan['added_by']}"
+        except:
+            added_by_name = f"ID: {clan['added_by']}"
+        
+        info.append(f"👤 Добавил: {added_by_name}")
+        info.append(f"🕒 {clan['added_at'].strftime('%d.%m.%Y')}")
+        
+        embed.add_field(
+            name=clan_name,
+            value="\n".join(info) if info else "Нет дополнительной информации",
+            inline=False
+        )
+    
+    # Добавляем статистику
+    count = len(clans)
+    total_clans = await clan_manager.get_clan_count(ctx.guild.id)
+    
+    embed.set_footer(text=f"Всего в категории: {count} | Всего кланов на сервере: {total_clans}")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='allclans')
+async def all_clans(ctx):
+    """Показать все кланы (союзники, враги, нейтральные)"""
+    clans = await clan_manager.get_all_clans(ctx.guild.id)
+    
+    if not clans:
+        embed = discord.Embed(
+            title="📋 Список кланов пуст",
+            description="Добавьте кланы с помощью команды `!addclan`",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Все кланы на сервере",
+        description=f"Всего кланов: **{len(clans)}**",
+        color=COLORS['info']
+    )
+    
+    # Группируем по типам
+    ally_clans = [c for c in clans if c['clan_type'] == 'ally']
+    enemy_clans = [c for c in clans if c['clan_type'] == 'enemy']
+    peace_clans = [c for c in clans if c['clan_type'] == 'peace']
+    
+    # Союзники
+    if ally_clans:
+        ally_text = []
+        for clan in ally_clans[:10]:  # Показываем не больше 10
+            name = clan['name']
+            if clan['tag']:
+                name = f"[{clan['tag']}] {name}"
+            ally_text.append(f"• {name}")
+        
+        if len(ally_clans) > 10:
+            ally_text.append(f"*... и ещё {len(ally_clans) - 10}*")
+        
+        embed.add_field(
+            name=f"🤝 Союзники ({len(ally_clans)})",
+            value="\n".join(ally_text) if ally_text else "Нет союзников",
+            inline=False
+        )
+    
+    # Нейтральные
+    if peace_clans:
+        peace_text = []
+        for clan in peace_clans[:10]:
+            name = clan['name']
+            if clan['tag']:
+                name = f"[{clan['tag']}] {name}"
+            peace_text.append(f"• {name}")
+        
+        if len(peace_clans) > 10:
+            peace_text.append(f"*... и ещё {len(peace_clans) - 10}*")
+        
+        embed.add_field(
+            name=f"🕊️ Нейтральные ({len(peace_clans)})",
+            value="\n".join(peace_text) if peace_text else "Нет нейтральных",
+            inline=False
+        )
+    
+    # Враги
+    if enemy_clans:
+        enemy_text = []
+        for clan in enemy_clans[:10]:
+            name = clan['name']
+            if clan['tag']:
+                name = f"[{clan['tag']}] {name}"
+            enemy_text.append(f"• {name}")
+        
+        if len(enemy_clans) > 10:
+            enemy_text.append(f"*... и ещё {len(enemy_clans) - 10}*")
+        
+        embed.add_field(
+            name=f"⚔️ Враги ({len(enemy_clans)})",
+            value="\n".join(enemy_text) if enemy_text else "Нет врагов",
+            inline=False
+        )
+    
+    # Если кланов слишком много, добавляем статистику
+    if len(clans) > 30:
+        embed.add_field(
+            name="📊 Статистика",
+            value=f"Для просмотра полного списка используйте:\n"
+                  f"• `!allyclans` - союзники\n"
+                  f"• `!enemyclans` - враги\n"
+                  f"• `!peaceclans` - нейтральные",
+            inline=False
+        )
+    
+    embed.set_footer(text="Для добавления кланов используйте !addclan")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='claninfo')
+async def clan_info(ctx, clan_type: str, *, name: str):
+    """
+    Показать подробную информацию о клане
+    
+    Примеры:
+    !claninfo ally "Название клана"
+    !claninfo enemy "Название клана"
+    !claninfo peace "Название клана"
+    """
+    valid_types = ['ally', 'enemy', 'peace']
+    clan_type = clan_type.lower()
+    
+    if clan_type not in valid_types:
+        embed = discord.Embed(
+            title="❌ Неверный тип клана",
+            description=f"Доступные типы: {', '.join(valid_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Получаем информацию о клане
+    clans = await clan_manager.get_clans_by_type(ctx.guild.id, clan_type)
+    clan = None
+    for c in clans:
+        if c['name'].lower() == name.lower():
+            clan = c
+            break
+    
+    if not clan:
+        embed = discord.Embed(
+            title="❌ Клан не найден",
+            description=f"Клан **{name}** не найден в категории **{clan_manager.get_type_name(clan_type)}**",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title=f"{clan_manager.get_type_emoji(clan_type)} Информация о клане {clan['name']}",
+        color=COLORS['info']
+    )
+    
+    # Основная информация
+    if clan['tag']:
+        embed.add_field(name="📌 Тег", value=f"`[{clan['tag']}]`", inline=True)
+    
+    embed.add_field(name="📂 Категория", value=clan_manager.get_type_name(clan_type), inline=True)
+    
+    if clan['description']:
+        embed.add_field(name="📝 Описание", value=clan['description'], inline=False)
+    
+    # Информация о добавившем
+    try:
+        added_by = await ctx.guild.fetch_member(clan['added_by'])
+        added_by_name = added_by.display_name if added_by else f"ID: {clan['added_by']}"
+    except:
+        added_by_name = f"ID: {clan['added_by']}"
+    
+    embed.add_field(name="👤 Добавил", value=added_by_name, inline=True)
+    embed.add_field(name="🕒 Дата добавления", value=clan['added_at'].strftime('%d.%m.%Y %H:%M'), inline=True)
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='editclan')
+@is_admin()
+async def edit_clan(ctx, clan_type: str, name: str, field: str, *, value: str):
+    """
+    Редактировать информацию о клане
+    
+    Поля для редактирования:
+    - tag - изменить тег
+    - desc - изменить описание
+    
+    Примеры:
+    !editclan ally "Клан" tag NEWTAG
+    !editclan enemy "Клан" desc "Новое описание"
+    """
+    valid_types = ['ally', 'enemy', 'peace']
+    clan_type = clan_type.lower()
+    
+    if clan_type not in valid_types:
+        embed = discord.Embed(
+            title="❌ Неверный тип клана",
+            description=f"Доступные типы: {', '.join(valid_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    field = field.lower()
+    
+    if field == 'tag':
+        # Обновляем тег
+        success, message = await clan_manager.update_clan_tag(
+            ctx.guild.id, name, clan_type, value
+        )
+        embed = discord.Embed(
+            title="✅ Тег обновлен" if success else "❌ Ошибка",
+            description=message,
+            color=COLORS['success'] if success else COLORS['error']
+        )
+        
+    elif field == 'desc' or field == 'description':
+        # Обновляем описание
+        success, message = await clan_manager.update_clan_description(
+            ctx.guild.id, name, clan_type, value
+        )
+        embed = discord.Embed(
+            title="✅ Описание обновлено" if success else "❌ Ошибка",
+            description=message,
+            color=COLORS['success'] if success else COLORS['error']
+        )
+        
+    else:
+        embed = discord.Embed(
+            title="❌ Неверное поле",
+            description=f"Доступные поля: tag, desc",
+            color=COLORS['error']
+        )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='clearclans')
+@is_admin()
+async def clear_clans(ctx):
+    """Удалить ВСЕ кланы на сервере"""
+    count = await clan_manager.get_clan_count(ctx.guild.id)
+    
+    if count == 0:
+        embed = discord.Embed(
+            title="ℹ️ Нет кланов",
+            description="На сервере нет кланов для удаления",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
+        description=f"Вы уверены, что хотите удалить ВСЕ кланы ({count} шт.)?\nЭто действие необратимо!",
+        color=COLORS['error']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        await clan_manager.clear_all_clans(ctx.guild.id)
+        
+        confirm_embed = discord.Embed(
+            title="✅ Все кланы удалены",
+            description=f"Удалено {count} кланов",
+            color=COLORS['success']
+        )
+        await interaction.response.edit_message(embed=confirm_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Удаление отменено",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='searchclan')
+async def search_clan(ctx, *, search_term: str):
+    """Поиск клана по названию"""
+    clans = await clan_manager.search_clan(ctx.guild.id, search_term)
+    
+    if not clans:
+        embed = discord.Embed(
+            title="🔍 Результаты поиска",
+            description=f"Кланы по запросу **{search_term}** не найдены",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title=f"🔍 Результаты поиска: {search_term}",
+        description=f"Найдено кланов: **{len(clans)}**",
+        color=COLORS['info']
+    )
+    
+    # Группируем по типам
+    for clan_type in ['ally', 'peace', 'enemy']:
+        type_clans = [c for c in clans if c['clan_type'] == clan_type]
+        if type_clans:
+            clan_names = []
+            for clan in type_clans[:5]:  # Показываем не больше 5 на категорию
+                name = clan['name']
+                if clan['tag']:
+                    name = f"[{clan['tag']}] {name}"
+                clan_names.append(f"• {name}")
+            
+            if len(type_clans) > 5:
+                clan_names.append(f"*... и ещё {len(type_clans) - 5}*")
+            
+            embed.add_field(
+                name=f"{clan_manager.get_type_emoji(clan_type)} {clan_manager.get_type_name(clan_type)} ({len(type_clans)})",
+                value="\n".join(clan_names),
+                inline=False
+            )
+    
+    await safe_send(ctx, embed=embed)
+
+# ========== КОМАНДА HELP ==========
+
 @bot.command(name='help')
 async def help_command(ctx):
     """Показать все команды"""
@@ -1922,7 +2646,13 @@ async def help_command(ctx):
               f"• `{PREFIX}leaderboard [страница]` - Таблица лидеров\n"
               f"• `{PREFIX}roles` - Система ролей\n"
               f"• `{PREFIX}ping` - Проверить статус бота\n"
-              f"• `{PREFIX}help` - Эта справка",
+              f"• `{PREFIX}help` - Эта справка\n"
+              f"• `{PREFIX}allyclans` - Показать союзников\n"
+              f"• `{PREFIX}enemyclans` - Показать врагов\n"
+              f"• `{PREFIX}peaceclans` - Показать нейтральных\n"
+              f"• `{PREFIX}allclans` - Показать все кланы\n"
+              f"• `{PREFIX}claninfo [тип] \"название\"` - Информация о клане\n"
+              f"• `{PREFIX}searchclan \"название\"` - Поиск клана",
         inline=False
     )
     
@@ -1965,9 +2695,34 @@ async def help_command(ctx):
                   f"• `{PREFIX}unlock` - Разблокировать каналы для роли",
             inline=False
         )
+        
+        # Команды для управления кланами
+        embed.add_field(
+            name="🏰 Команды для управления кланами",
+            value=f"• `{PREFIX}addclan [тип] \"название\" [тег] [описание]` - Добавить клан\n"
+                  f"• `{PREFIX}removeclan [тип] \"название\"` - Удалить клан\n"
+                  f"• `{PREFIX}editclan [тип] \"название\" [поле] [значение]` - Редактировать клан\n"
+                  f"• `{PREFIX}clearclans` - Удалить все кланы",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="📋 Типы кланов:",
+            value="• `ally` - союзники 🤝\n"
+                  "• `enemy` - враги ⚔️\n"
+                  "• `peace` - нейтральные/пис 🕊️",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="✏️ Поля для редактирования:",
+            value="• `tag` - изменить тег\n"
+                  "• `desc` - изменить описание",
+            inline=False
+        )
     
     # Информация о системе
-    admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS)
+    admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
     
     embed.add_field(
         name="ℹ️ Информация о боте",
