@@ -75,7 +75,10 @@ ROLE_COLORS = {
     'raider newgen': discord.Color.green(),
     'raider scout': discord.Color.blue(),
     'raider striker': discord.Color.orange(),
+    'raider heavy': discord.Color.yellow(),
     'raider legend': discord.Color.purple(),
+    'raider who lives on raids': discord.Color.blue(),
+    'raider moderator': discord.Color.red(),
     'raider commander': discord.Color.gold()
 }
 
