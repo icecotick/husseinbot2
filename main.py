@@ -2506,18 +2506,19 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
         if clan['tag']:
             clan_name = f"[{clan['tag']}] {clan_name}"
         
-        # Информация о клане - только название и описание
-        info = []
-        
-        # Добавляем описание если есть
+        # Добавляем описание только если оно есть
         if clan['description']:
-            info.append(f"📝 {clan['description']}")
-        
-        embed.add_field(
-            name=clan_name,
-            value="\n".join(info) if info else "Нет дополнительной информации",
-            inline=False
-        )
+            embed.add_field(
+                name=clan_name,
+                value=clan['description'],
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name=clan_name,
+                value="​",  # Zero-width space для пустого поля
+                inline=False
+            )
     
     # Добавляем статистику
     count = len(clans)
