@@ -2576,7 +2576,7 @@ async def all_clans(ctx):
         
         embed.add_field(
             name=f"🤝 Союзники ({len(ally_clans_list)})",
-            value="\n".join(ally_text) if ally_text else "Нет союзников",
+            value="\n".join(ally_text) if ally_text else "​",  # Zero-width space вместо "Нет союзников"
             inline=False
         )
     
@@ -2594,7 +2594,7 @@ async def all_clans(ctx):
         
         embed.add_field(
             name=f"🕊️ Нейтральные ({len(peace_clans_list)})",
-            value="\n".join(peace_text) if peace_text else "Нет нейтральных",
+            value="\n".join(peace_text) if peace_text else "​",  # Zero-width space вместо "Нет нейтральных"
             inline=False
         )
     
@@ -2612,7 +2612,7 @@ async def all_clans(ctx):
         
         embed.add_field(
             name=f"⚔️ Враги ({len(enemy_clans_list)})",
-            value="\n".join(enemy_text) if enemy_text else "Нет врагов",
+            value="\n".join(enemy_text) if enemy_text else "​",  # Zero-width space вместо "Нет врагов"
             inline=False
         )
     
@@ -2620,16 +2620,7 @@ async def all_clans(ctx):
     if len(clans) > 30:
         embed.add_field(
             name="📊 Статистика",
-            value=f"Для просмотра полного списка используйте:\n"
-                  f"• `!allyclans` - союзники\n"
-                  f"• `!enemyclans` - враги\n"
-                  f"• `!peaceclans` - нейтральные",
-            inline=False
-        )
-    
-    embed.set_footer(text="Для добавления кланов используйте !addclan")
-    
-    await safe_send(ctx, embed=embed)
+           
 
 @bot.command(name='claninfo')
 async def clan_info(ctx, clan_type: str, *, name: str):
