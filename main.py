@@ -2279,6 +2279,8 @@ async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: s
 
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
 
+# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
+
 @bot.command(name='addclan')
 @is_admin()
 async def add_clan(ctx, clan_type: str, name: str, tag: str = None, *, description: str = None):
@@ -2504,22 +2506,12 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
         if clan['tag']:
             clan_name = f"[{clan['tag']}] {clan_name}"
         
-        # Информация о клане
+        # Информация о клане - только название и описание
         info = []
         
         # Добавляем описание если есть
         if clan['description']:
             info.append(f"📝 {clan['description']}")
-        
-        # Добавляем информацию о добавившем
-        try:
-            added_by = await ctx.guild.fetch_member(clan['added_by'])
-            added_by_name = added_by.display_name if added_by else f"ID: {clan['added_by']}"
-        except:
-            added_by_name = f"ID: {clan['added_by']}"
-        
-        info.append(f"👤 Добавил: {added_by_name}")
-        info.append(f"🕒 {clan['added_at'].strftime('%d.%m.%Y')}")
         
         embed.add_field(
             name=clan_name,
