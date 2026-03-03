@@ -2492,6 +2492,8 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
             description=f"❌ В этой категории пока нет кланов.\nДобавьте с помощью `!addclan {clan_type} \"название\"`",
             color=COLORS['info']
         )
+        # Добавляем гифку в начало
+        embed.set_image(url="https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&")
         await safe_send(ctx, embed=embed)
         return
     
@@ -2499,8 +2501,9 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
         title=title,
         color=COLORS['info']
     )
-    
+    # Добавляем гифку в начало
     embed.set_image(url="https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&")
+    
     for clan in clans:
         # Формируем название с тегом
         clan_name = clan['name']
