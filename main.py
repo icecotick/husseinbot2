@@ -3725,7 +3725,7 @@ async def clear_admin_roles(ctx):
             await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
             return
         
-        nonlocal ADMIN_ROLE_IDS
+        global ADMIN_ROLE_IDS
         old_count = len(ADMIN_ROLE_IDS)
         ADMIN_ROLE_IDS = []
         
