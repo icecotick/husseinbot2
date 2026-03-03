@@ -2757,105 +2757,206 @@ async def help_command(ctx):
         pass
     
     embed = discord.Embed(
-        title="Помощь по командам",
-        description=f"Префикс команд: `{PREFIX}`\nВсе команды начинаются с префикса `{PREFIX}`",
+        title="📚 Помощь по командам бота",
+        description=f"**Префикс команд:** `{PREFIX}`\n"
+                   f"Все команды начинаются с префикса `{PREFIX}`\n"
+                   f"Пример: `{PREFIX}points @user`",
         color=COLORS['info']
     )
     
-    # Команды для всех
+    # ========== КОМАНДЫ ДЛЯ ВСЕХ ==========
     embed.add_field(
-        name="👤 Команды для всех",
-        value=f"• `{PREFIX}points [@пользователь]` - Проверить поинты\n"
-              f"• `{PREFIX}leaderboard [страница]` - Таблица лидеров\n"
-              f"• `{PREFIX}roles` - Система ролей\n"
-              f"• `{PREFIX}ping` - Проверить статус бота\n"
-              f"• `{PREFIX}help` - Эта справка\n"
-              f"• `{PREFIX}allyclans` - Показать союзников\n"
-              f"• `{PREFIX}enemyclans` - Показать врагов\n"
-              f"• `{PREFIX}peaceclans` - Показать нейтральных\n"
-              f"• `{PREFIX}allclans` - Показать все кланы\n"
-              f"• `{PREFIX}claninfo [тип] \"название\"` - Информация о клане\n"
-              f"• `{PREFIX}searchclan \"название\"` - Поиск клана",
+        name="👤 **Команды для всех пользователей**",
+        value=f"```{PREFIX}points [@пользователь]``` - Проверить свои или чужие поинты\n"
+              f"```{PREFIX}leaderboard [страница]``` - Показать топ пользователей по поинтам\n"
+              f"```{PREFIX}roles``` - Показать систему ролей за поинты\n"
+              f"```{PREFIX}ping``` - Проверить статус бота и задержку\n"
+              f"```{PREFIX}help``` - Показать это сообщение\n"
+              f"```{PREFIX}allyclans``` - Показать список союзных кланов\n"
+              f"```{PREFIX}enemyclans``` - Показать список вражеских кланов\n"
+              f"```{PREFIX}peaceclans``` - Показать список нейтральных кланов\n"
+              f"```{PREFIX}allclans``` - Показать все кланы на сервере\n"
+              f"```{PREFIX}claninfo [тип] \"название\"``` - Информация о конкретном клане\n"
+              f"```{PREFIX}searchclan \"название\"``` - Поиск клана по названию",
         inline=False
     )
     
-    # Команды для админов
+    # Если пользователь админ - показываем админские команды
     if is_user_admin:
+        # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ ПОИНТАМИ ==========
         embed.add_field(
-            name="👑 Команды для админов (поинты)",
-            value=f"• `{PREFIX}addpoints @пользователь количество [причина]` - Выдать поинты\n"
-                  f"• `{PREFIX}removepoints @пользователь количество [причина]` - Забрать поинты\n"
-                  f"• `{PREFIX}setpoints @пользователь количество [причина]` - Установить поинты\n"
-                  f"• `{PREFIX}resetpoints` - Сбросить все поинты\n"
-                  f"• `{PREFIX}addpoints_multi количество @пользователь1 @пользователь2 ... [причина]` - Массовая выдача",
+            name="💰 **Управление поинтами (Админ)**",
+            value=f"```{PREFIX}addpoints @user количество [причина]``` - Выдать поинты пользователю\n"
+                  f"```{PREFIX}removepoints @user количество [причина]``` - Забрать поинты у пользователя\n"
+                  f"```{PREFIX}setpoints @user количество [причина]``` - Установить точное количество поинтов\n"
+                  f"```{PREFIX}addpoints_multi количество @user1 @user2 ...``` - Выдать поинты нескольким пользователям\n"
+                  f"```{PREFIX}resetpoints``` - СБРОСИТЬ ВСЕ поинты на сервере (требует подтверждения)",
             inline=False
         )
         
-        # Команды для админов (блокировка каналов)
+        # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ РОЛЯМИ ЗА ПОИНТЫ ==========
         embed.add_field(
-            name="🔒 Команды для блокировки каналов",
-            value=f"• `{PREFIX}addchannel #канал` - Добавить канал в список\n"
-                  f"• `{PREFIX}removechannel [#канал]` - Удалить канал из списка\n"
-                  f"• `{PREFIX}listchannels` - Показать список каналов\n"
-                  f"• `{PREFIX}lockchannels @роль [тип]` - Заблокировать каналы\n"
-                  f"• `{PREFIX}unlockchannels [@роль]` - Разблокировать каналы\n"
-                  f"• `{PREFIX}lockinfo` - Показать активные блокировки\n"
-                  f"• `{PREFIX}clearlocks` - Удалить все блокировки",
+            name="🎭 **Управление ролями за поинты (Админ)**",
+            value=f"```{PREFIX}addrole 200 \"название роли\"``` - Добавить новую роль за поинты\n"
+                  f"```{PREFIX}removerole 200``` - Удалить роль по количеству поинтов\n"
+                  f"```{PREFIX}removerolebyname \"название роли\"``` - Удалить роль по названию\n"
+                  f"```{PREFIX}editrole 200 250``` - Изменить количество поинтов для роли\n"
+                  f"```{PREFIX}editrole 200 \"новое название\"``` - Изменить название роли\n"
+                  f"```{PREFIX}editrole 200 250 \"новое название\"``` - Изменить и поинты, и название\n"
+                  f"```{PREFIX}setrolecolor 200 #FF0000``` - Установить цвет роли (HEX код)\n"
+                  f"```{PREFIX}setrolecolor 200 red``` - Или по названию цвета\n"
+                  f"```{PREFIX}reorderroles``` - Пересоздать все роли в правильном порядке\n"
+                  f"```{PREFIX}updateroles``` - Обновить роли для ВСЕХ участников сервера\n"
+                  f"```{PREFIX}saveroles``` - Сохранить конфигурацию ролей в файл",
             inline=False
         )
         
+        # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ АДМИНСКИМИ РОЛЯМИ ==========
         embed.add_field(
-            name="ℹ️ Типы блокировки:",
-            value="• `send` - запрет писать и прикреплять файлы\n"
-                  "• `view` - скрытие канала\n"
-                  "• `both` - полная блокировка",
+            name="👑 **Управление админскими ролями (Админ)**",
+            value=f"```{PREFIX}addadminrole @роль``` - Добавить роль в список админов бота\n"
+                  f"```{PREFIX}removeadminrole @роль``` - Удалить роль из списка админов\n"
+                  f"```{PREFIX}listadminroles``` - Показать все текущие админские роли\n"
+                  f"```{PREFIX}clearadminroles``` - Удалить ВСЕ админские роли (требует подтверждения)",
             inline=False
         )
         
+        # ========== КОМАНДЫ ДЛЯ БЛОКИРОВКИ КАНАЛОВ ==========
         embed.add_field(
-            name="⚡ Быстрые команды для роли 1431589898183512129",
-            value=f"• `{PREFIX}lock [тип]` - Заблокировать каналы для роли\n"
-                  f"• `{PREFIX}unlock` - Разблокировать каналы для роли",
+            name="🔒 **Управление блокировкой каналов (Админ)**",
+            value=f"```{PREFIX}addchannel #канал``` - Добавить канал в список для блокировки\n"
+                  f"```{PREFIX}removechannel [#канал]``` - Удалить канал из списка\n"
+                  f"```{PREFIX}listchannels``` - Показать все каналы в списке\n"
+                  f"```{PREFIX}lockchannels @роль [тип]``` - Заблокировать каналы для роли\n"
+                  f"```{PREFIX}unlockchannels [@роль]``` - Разблокировать каналы для роли\n"
+                  f"```{PREFIX}lockinfo``` - Показать все активные блокировки\n"
+                  f"```{PREFIX}clearlocks``` - Удалить ВСЕ блокировки на сервере",
             inline=False
         )
         
-        # Команды для управления кланами
+        # ========== БЫСТРЫЕ КОМАНДЫ ДЛЯ КОНКРЕТНОЙ РОЛИ ==========
         embed.add_field(
-            name="🏰 Команды для управления кланами",
-            value=f"• `{PREFIX}addclan [тип] \"название\" [тег] [описание]` - Добавить клан\n"
-                  f"• `{PREFIX}removeclan [тип] \"название\"` - Удалить клан\n"
-                  f"• `{PREFIX}editclan [тип] \"название\" [поле] [значение]` - Редактировать клан\n"
-                  f"• `{PREFIX}clearclans` - Удалить все кланы",
+            name="⚡ **Быстрые команды для роли (ID: 1431589898183512129)**",
+            value=f"```{PREFIX}lock [тип]``` - Быстрая блокировка каналов для роли\n"
+                  f"```{PREFIX}unlock``` - Быстрая разблокировка каналов для роли\n"
+                  f"**Типы блокировки:** `send` (только писать), `view` (скрыть), `both` (полная)",
             inline=False
         )
         
+        # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
         embed.add_field(
-            name="📋 Типы кланов:",
-            value="• `ally` - союзники 🤝\n"
-                  "• `enemy` - враги ⚔️\n"
-                  "• `peace` - нейтральные/пис 🕊️",
+            name="🏰 **Управление кланами (Админ)**",
+            value=f"```{PREFIX}addclan ally \"название\" [тег] [описание]``` - Добавить союзника\n"
+                  f"```{PREFIX}addclan enemy \"название\" [тег] [описание]``` - Добавить врага\n"
+                  f"```{PREFIX}addclan peace \"название\" [тег] [описание]``` - Добавить нейтрального\n"
+                  f"```{PREFIX}removeclan ally \"название\"``` - Удалить из союзников\n"
+                  f"```{PREFIX}removeclan enemy \"название\"``` - Удалить из врагов\n"
+                  f"```{PREFIX}removeclan peace \"название\"``` - Удалить из нейтральных\n"
+                  f"```{PREFIX}removeclan \"название\"``` - Удалить из всех категорий\n"
+                  f"```{PREFIX}editclan ally \"название\" tag NEWTAG``` - Изменить тег клана\n"
+                  f"```{PREFIX}editclan ally \"название\" desc \"новое описание\"``` - Изменить описание\n"
+                  f"```{PREFIX}clearclans``` - Удалить ВСЕ кланы на сервере",
             inline=False
         )
         
+        # ========== ЭКСПОРТ ДАННЫХ ==========
         embed.add_field(
-            name="✏️ Поля для редактирования:",
-            value="• `tag` - изменить тег\n"
-                  "• `desc` - изменить описание",
+            name="📊 **Экспорт данных (Админ)**",
+            value=f"```{PREFIX}export``` - Экспортировать все данные о поинтах в CSV файл",
+            inline=False
+        )
+        
+        # ========== ИНФОРМАЦИЯ О ТИПАХ БЛОКИРОВКИ ==========
+        embed.add_field(
+            name="ℹ️ **Типы блокировки каналов**",
+            value="• `send` - Запрет на отправку сообщений, реакций и файлов\n"
+                  "• `view` - Полное скрытие канала (не видно)\n"
+                  "• `both` - Полная блокировка (скрыто + нельзя писать)",
+            inline=False
+        )
+        
+        # ========== ИНФОРМАЦИЯ О ТИПАХ КЛАНОВ ==========
+        embed.add_field(
+            name="📋 **Типы кланов**",
+            value="• `ally` - Союзники (🤝)\n"
+                  "• `enemy` - Враги (⚔️)\n"
+                  "• `peace` - Нейтральные/Пис (🕊️)",
+            inline=False
+        )
+        
+        # ========== ИНФОРМАЦИЯ О ЦВЕТАХ ДЛЯ РОЛЕЙ ==========
+        embed.add_field(
+            name="🎨 **Доступные цвета для ролей**",
+            value="**HEX коды:** `#FF0000` (красный), `#00FF00` (зеленый), `#0000FF` (синий)\n"
+                  "**Названия:** `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `gold`, `pink`, `brown`, `black`, `white`",
             inline=False
         )
     
-    # Информация о системе
-    admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
+    # ========== СИСТЕМНАЯ ИНФОРМАЦИЯ ==========
+    # Формируем информацию об админских ролях
+    admin_roles_text = []
+    if ADMIN_ROLE_IDS:
+        for role_id in ADMIN_ROLE_IDS[:5]:  # Показываем первые 5 ролей
+            role = ctx.guild.get_role(role_id)
+            if role:
+                admin_roles_text.append(f"• {role.mention}")
+            else:
+                admin_roles_text.append(f"• Роль ID: `{role_id}`")
+        
+        if len(ADMIN_ROLE_IDS) > 5:
+            admin_roles_text.append(f"*... и ещё {len(ADMIN_ROLE_IDS) - 5} ролей*")
+    else:
+        admin_roles_text = ["• Не настроены (только администраторы Discord)"]
+    
+    # Информация о ролях за поинты
+    roles_count = len(ROLE_SETTINGS)
+    if roles_count > 0:
+        roles_range = f"от {min(ROLE_SETTINGS.keys())} до {max(ROLE_SETTINGS.keys())} поинтов"
+    else:
+        roles_range = "не настроены"
     
     embed.add_field(
-        name="ℹ️ Информация о боте",
-        value=f"• Админские ID ролей: {admin_role_ids_str}\n"
-              f"• База данных: PostgreSQL\n"
-              f"• Хостинг: Render.com\n"
-              f"• Порт: {PORT}\n"
-              f"• Режим работы: 24/7",
+        name="ℹ️ **Информация о системе**",
+        value=f"**🤖 Бот:** {bot.user.name}\n"
+              f"**📊 Серверов:** {len(bot.guilds)}\n"
+              f"**🌐 Порт веб-сервера:** {PORT}\n"
+              f"**🗄️ База данных:** PostgreSQL\n"
+              f"**🎭 Ролей за поинты:** {roles_count} ({roles_range})\n"
+              f"**👑 Админские роли:**\n" + "\n".join(admin_roles_text),
         inline=False
     )
+    
+    # ========== ПРИМЕРЫ ИСПОЛЬЗОВАНИЯ ==========
+    embed.add_field(
+        name="📝 **Примеры использования**",
+        value=f"`{PREFIX}points` - проверить свои поинты\n"
+              f"`{PREFIX}points @User` - проверить поинты пользователя\n"
+              f"`{PREFIX}leaderboard` - топ-10 пользователей\n"
+              f"`{PREFIX}addpoints @User 100 Спасибо за активность` - выдать поинты\n"
+              f"`{PREFIX}addrole 500 \"Легендарный рейдер\"` - добавить новую роль\n"
+              f"`{PREFIX}addadminrole @Админ` - добавить админскую роль\n"
+              f"`{PREFIX}addclan ally \"Братство\" [BR] \"Наши верные союзники\"` - добавить клан",
+        inline=False
+    )
+    
+    # ========== ПОЛЕЗНЫЕ ССЫЛКИ ==========
+    embed.add_field(
+        name="🔗 **Полезные ссылки**",
+        value="• [Документация Discord.py](https://discordpy.readthedocs.io/)\n"
+              "• [Поддержка](https://discord.gg/your-server)\n"
+              f"• Версия бота: v2.0",
+        inline=False
+    )
+    
+    # ========== ФУТЕР ==========
+    embed.set_footer(
+        text=f"Запрошено: {ctx.author.display_name} | Всего команд: {len(bot.commands)} | {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+        icon_url=ctx.author.display_avatar.url
+    )
+    
+    # Добавляем иконку бота если есть
+    if bot.user.avatar:
+        embed.set_thumbnail(url=bot.user.avatar.url)
     
     await safe_send(ctx, embed=embed)
 
