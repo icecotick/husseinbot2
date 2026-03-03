@@ -1773,7 +1773,7 @@ async def raid_command(ctx, clan: str, link: str):
     
     # Создаем оповещение
     embed = discord.Embed(
-        title="🚨 РЕЙД ОБЪЯВЛЕН! 🚨",
+        title="РЕЙД!",
         description="Всем участникам срочно присоединиться!",
         color=discord.Color.red()
     )
@@ -1806,27 +1806,85 @@ async def raid_command(ctx, clan: str, link: str):
     )
     await safe_send(ctx, embed=confirm_embed)
 
+
+
+# Хранилище последней использованной роли для каждого сервера
+last_locked_role = {}  # {guild_id: role_id}
+
+
+
+# ЗАМЕНИТЕ существующую команду !lockrole на эту (или добавьте, если её нет)
+@bot.command(name='lockrole')
+@is_admin()
+async def lockrole_command(ctx, role: discord.Role):
+    """
+    Установить роль для быстрых команд !lock и !unlock
+    
+    Примеры:
+    !lockrole @роль
+    !lockrole @Новички
+    !lockrole @Администрация
+    """
+    global last_locked_role
+    
+    # Сохраняем роль для этого сервера
+    last_locked_role[ctx.guild.id] = role.id
+    
+    embed = discord.Embed(
+        title="✅ Роль установлена",
+        description=f"Теперь команды `!lock` и `!unlock` будут работать с ролью {role.mention}",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(name="ID роли", value=f"`{role.id}`", inline=True)
+    embed.add_field(name="Название роли", value=f"`{role.name}`", inline=True)
+    embed.add_field(
+        name="Как использовать", 
+        value=f"• `{PREFIX}lock [тип]` - заблокировать каналы для этой роли\n"
+              f"• `{PREFIX}unlock` - разблокировать каналы для этой роли",
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+
+
 @bot.command(name='unlock')
 @is_admin()
 async def unlock_command(ctx):
-    """Разблокировать все каналы из списка для конкретной роли"""
-    # ID конкретной роли
-    TARGET_ROLE_ID = 1431589898183512129
+    """
+    Разблокировать все каналы из списка для последней использованной роли
+    
+    Пример:
+    !unlock
+    """
+    global last_locked_role
+    
+    # Проверяем, есть ли сохраненная роль для этого сервера
+    if ctx.guild.id not in last_locked_role:
+        embed = discord.Embed(
+            title="❌ Роль не установлена",
+            description=f"Сначала используйте `{PREFIX}lockrole @роль` чтобы указать, с какой ролью работать!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
     
     # Получаем роль по ID
-    target_role = ctx.guild.get_role(TARGET_ROLE_ID)
+    role_id = last_locked_role[ctx.guild.id]
+    target_role = ctx.guild.get_role(role_id)
+    
     if not target_role:
-        # Пробуем получить роль через fetch
-        try:
-            target_role = await ctx.guild.fetch_role(TARGET_ROLE_ID)
-        except:
-            embed = discord.Embed(
-                title="❌ Роль не найдена",
-                description=f"Роль с ID `{TARGET_ROLE_ID}` не найдена на сервере!",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            return
+        # Если роль не найдена (возможно была удалена), очищаем сохраненную
+        del last_locked_role[ctx.guild.id]
+        embed = discord.Embed(
+            title="❌ Роль не найдена",
+            description=f"Роль с ID `{role_id}` больше не существует на сервере.\n"
+                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
     
     embed = discord.Embed(
         title="🔓 Разблокировка каналов",
@@ -1834,7 +1892,7 @@ async def unlock_command(ctx):
         color=COLORS['info']
     )
     
-    embed.add_field(name="ID роли", value=f"`{TARGET_ROLE_ID}`", inline=True)
+    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
     embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
     
     message = await safe_send(ctx, embed=embed)
@@ -1854,6 +1912,8 @@ async def unlock_command(ctx):
         color=COLORS['success'] if error_count == 0 else COLORS['warning']
     )
     
+    final_embed.description = f"Каналы разблокированы для роли {target_role.mention}"
+    
     final_embed.add_field(
         name="📊 Результаты",
         value=f"✅ Успешно: {success_count} каналов\n"
@@ -1872,7 +1932,7 @@ async def unlock_command(ctx):
     
     final_embed.add_field(
         name="🎯 Для роли",
-        value=f"{target_role.mention} (ID: `{TARGET_ROLE_ID}`)",
+        value=f"{target_role.mention} (ID: `{target_role.id}`)",
         inline=True
     )
     
@@ -1884,19 +1944,51 @@ async def unlock_command(ctx):
     
     await safe_edit(message, embed=final_embed)
 
+
+
 @bot.command(name='lock')
 @is_admin()
 async def lock_command(ctx, lock_type: str = "send"):
     """
-    Заблокировать все каналы из списка для роли 1431589898183512129
+    Заблокировать все каналы из списка для последней использованной роли
     
     Типы блокировки:
     - send: запрет писать, ставить реакции, прикреплять файлы
     - view: запрет читать и писать (канал скрыт)
     - both: полная блокировка
+    
+    Примеры:
+    !lock send
+    !lock view
+    !lock both
     """
-    # ID конкретной роли
-    TARGET_ROLE_ID = 1431589898183512129
+    global last_locked_role
+    
+    # Проверяем, есть ли сохраненная роль для этого сервера
+    if ctx.guild.id not in last_locked_role:
+        embed = discord.Embed(
+            title="❌ Роль не установлена",
+            description=f"Сначала используйте `{PREFIX}lockrole @роль` чтобы указать, с какой ролью работать!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Получаем роль по ID
+    role_id = last_locked_role[ctx.guild.id]
+    target_role = ctx.guild.get_role(role_id)
+    
+    if not target_role:
+        # Если роль не найдена (возможно была удалена), очищаем сохраненную
+        del last_locked_role[ctx.guild.id]
+        embed = discord.Embed(
+            title="❌ Роль не найдена",
+            description=f"Роль с ID `{role_id}` больше не существует на сервере.\n"
+                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
     
     lock_types = ['send', 'view', 'both']
     
@@ -1908,21 +2000,6 @@ async def lock_command(ctx, lock_type: str = "send"):
         )
         await safe_send(ctx, embed=embed)
         return
-    
-    # Получаем роль по ID
-    target_role = ctx.guild.get_role(TARGET_ROLE_ID)
-    if not target_role:
-        # Пробуем получить роль через fetch
-        try:
-            target_role = await ctx.guild.fetch_role(TARGET_ROLE_ID)
-        except:
-            embed = discord.Embed(
-                title="❌ Роль не найдена",
-                description=f"Роль с ID `{TARGET_ROLE_ID}` не найдена на сервере!",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            return
     
     embed = discord.Embed(
         title="🔒 Блокировка каналов",
@@ -1938,7 +2015,7 @@ async def lock_command(ctx, lock_type: str = "send"):
     }
     
     embed.add_field(name="Тип блокировки", value=lock_info[lock_type.lower()], inline=False)
-    embed.add_field(name="ID роли", value=f"`{TARGET_ROLE_ID}`", inline=True)
+    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
     embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
     
     message = await safe_send(ctx, embed=embed)
@@ -1983,7 +2060,7 @@ async def lock_command(ctx, lock_type: str = "send"):
     
     final_embed.add_field(
         name="🎯 Для роли",
-        value=f"{target_role.mention} (ID: `{TARGET_ROLE_ID}`)",
+        value=f"{target_role.mention} (ID: `{target_role.id}`)",
         inline=True
     )
     
@@ -1996,6 +2073,88 @@ async def lock_command(ctx, lock_type: str = "send"):
     final_embed.set_footer(text=f"Тип блокировки: {lock_type.upper()}")
     
     await safe_edit(message, embed=final_embed)
+
+
+
+@bot.command(name='currentrole')
+@is_admin()
+async def current_role_command(ctx):
+    """
+    Показать текущую установленную роль для команд !lock и !unlock
+    """
+    global last_locked_role
+    
+    if ctx.guild.id not in last_locked_role:
+        embed = discord.Embed(
+            title="ℹ️ Роль не установлена",
+            description=f"Сейчас не выбрана ни одна роль.\n"
+                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить роль для команд `!lock` и `!unlock`.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    role_id = last_locked_role[ctx.guild.id]
+    target_role = ctx.guild.get_role(role_id)
+    
+    if not target_role:
+        embed = discord.Embed(
+            title="⚠️ Роль не найдена",
+            description=f"Сохранена роль с ID `{role_id}`, но она больше не существует на сервере.\n"
+                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
+            color=COLORS['warning']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="🎯 Текущая роль",
+        description=f"Команды `!lock` и `!unlock` сейчас работают с ролью {target_role.mention}",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
+    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
+    embed.add_field(
+        name="Доступные команды",
+        value=f"• `{PREFIX}lock [тип]` - заблокировать каналы\n"
+              f"• `{PREFIX}unlock` - разблокировать каналы\n"
+              f"• `{PREFIX}lockrole @другая_роль` - сменить роль",
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+
+# Добавьте команду для сброса установленной роли
+@bot.command(name='resetrole')
+@is_admin()
+async def reset_role_command(ctx):
+    """
+    Сбросить установленную роль для команд !lock и !unlock
+    """
+    global last_locked_role
+    
+    if ctx.guild.id not in last_locked_role:
+        embed = discord.Embed(
+            title="ℹ️ Роль не установлена",
+            description="Нет установленной роли для сброса.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Удаляем сохраненную роль
+    del last_locked_role[ctx.guild.id]
+    
+    embed = discord.Embed(
+        title="✅ Роль сброшена",
+        description=f"Теперь команды `!lock` и `!unlock` не будут работать, пока вы не установите новую роль с помощью `{PREFIX}lockrole @роль`.",
+        color=COLORS['success']
+    )
+    
+    await safe_send(ctx, embed=embed)
+
 
 @bot.command(name='addpoints_multi')
 @is_admin()
@@ -2740,6 +2899,887 @@ async def search_clan(ctx, *, search_term: str):
     
     await safe_send(ctx, embed=embed)
 
+# Добавьте эти новые команды после существующих команд (например, после команд управления админскими ролями)
+
+# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ РОЛЯМИ ЗА ПОИНТЫ ==========
+
+@bot.command(name='addrole')
+@is_admin()
+async def add_role_for_points(ctx, points: int, *, role_name: str):
+    """Добавить новую роль за поинты"""
+    global ROLE_SETTINGS, ROLE_COLORS
+    
+    # Проверяем, что количество поинтов положительное
+    if points <= 0:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Количество поинтов должно быть положительным числом!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Проверяем, не существует ли уже такая роль
+    if role_name in ROLE_SETTINGS.values():
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль **{role_name}** уже существует в системе!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Проверяем, не заняты ли уже такие поинты
+    if points in ROLE_SETTINGS:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"За {points} поинтов уже есть роль **{ROLE_SETTINGS[points]}**!\n"
+                       f"Используйте `{PREFIX}removerole {points}` чтобы удалить её сначала.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Добавляем роль в настройки
+    ROLE_SETTINGS[points] = role_name
+    
+    # Автоматически назначаем цвет (случайный или по умолчанию)
+    ROLE_COLORS[role_name] = discord.Color.random()
+    
+    # Создаем embed с подтверждением
+    embed = discord.Embed(
+        title="✅ Роль добавлена",
+        description=f"Новая роль за поинты успешно добавлена!",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(name="🎭 Название роли", value=f"**{role_name}**", inline=True)
+    embed.add_field(name="💰 Требуемые поинты", value=f"**{points}**", inline=True)
+    embed.add_field(name="🎨 Цвет", value=f"`{ROLE_COLORS[role_name]}`", inline=True)
+    
+    # Показываем текущую систему ролей
+    roles_text = []
+    for p, name in sorted(ROLE_SETTINGS.items()):
+        roles_text.append(f"• **{name}** - {p} поинтов")
+    
+    embed.add_field(
+        name="📊 Текущая система ролей",
+        value="\n".join(roles_text),
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+    
+    # Обновляем роли для всех участников (опционально)
+    await update_all_member_roles(ctx.guild)
+
+@bot.command(name='removerole')
+@is_admin()
+async def remove_role_for_points(ctx, points: int):
+    """Удалить роль за поинты по количеству поинтов"""
+    global ROLE_SETTINGS, ROLE_COLORS
+    
+    # Проверяем, существует ли роль с такими поинтами
+    if points not in ROLE_SETTINGS:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль за {points} поинтов не найдена!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    role_name = ROLE_SETTINGS[points]
+    
+    # Запрашиваем подтверждение
+    embed = discord.Embed(
+        title="⚠️ Подтверждение удаления",
+        description=f"Вы уверены, что хотите удалить роль **{role_name}** за {points} поинтов?",
+        color=COLORS['warning']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        # Удаляем роль из настроек
+        del ROLE_SETTINGS[points]
+        if role_name in ROLE_COLORS:
+            del ROLE_COLORS[role_name]
+        
+        # Удаляем саму роль на сервере (опционально)
+        discord_role = discord.utils.get(ctx.guild.roles, name=role_name)
+        if discord_role:
+            try:
+                await discord_role.delete(reason="Роль удалена из системы поинтов")
+            except:
+                pass
+        
+        confirm_embed = discord.Embed(
+            title="✅ Роль удалена",
+            description=f"Роль **{role_name}** за {points} поинтов успешно удалена из системы.",
+            color=COLORS['success']
+        )
+        
+        # Показываем обновленную систему
+        if ROLE_SETTINGS:
+            roles_text = []
+            for p, name in sorted(ROLE_SETTINGS.items()):
+                roles_text.append(f"• **{name}** - {p} поинтов")
+            confirm_embed.add_field(
+                name="📊 Обновленная система ролей",
+                value="\n".join(roles_text),
+                inline=False
+            )
+        else:
+            confirm_embed.add_field(
+                name="📊 Обновленная система ролей",
+                value="Система ролей пуста",
+                inline=False
+            )
+        
+        await interaction.response.edit_message(embed=confirm_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Удаление отменено",
+            description="Роль не была удалена.",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='removerolebyname')
+@is_admin()
+async def remove_role_by_name(ctx, *, role_name: str):
+    """Удалить роль за поинты по названию"""
+    global ROLE_SETTINGS, ROLE_COLORS
+    
+    # Ищем роль по названию
+    points_to_remove = None
+    for points, name in ROLE_SETTINGS.items():
+        if name.lower() == role_name.lower():
+            points_to_remove = points
+            break
+    
+    if points_to_remove is None:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль **{role_name}** не найдена в системе!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Вызываем команду удаления по поинтам
+    ctx.command = bot.get_command('removerole')
+    await ctx.invoke(bot.get_command('removerole'), points=points_to_remove)
+
+@bot.command(name='editrole')
+@is_admin()
+async def edit_role_for_points(ctx, old_points: int, new_points: int = None, *, new_name: str = None):
+    """Изменить роль за поинты (количество поинтов или название)"""
+    global ROLE_SETTINGS, ROLE_COLORS
+    
+    # Проверяем, существует ли исходная роль
+    if old_points not in ROLE_SETTINGS:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль за {old_points} поинтов не найдена!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    old_name = ROLE_SETTINGS[old_points]
+    
+    # Если указаны новые поинты
+    if new_points is not None:
+        if new_points <= 0:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description="Количество поинтов должно быть положительным числом!",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            return
+        
+        if new_points != old_points and new_points in ROLE_SETTINGS:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"За {new_points} поинтов уже есть роль **{ROLE_SETTINGS[new_points]}**!",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            return
+    
+    # Если указано новое название
+    if new_name is not None:
+        if new_name in ROLE_SETTINGS.values() and new_name != old_name:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"Роль **{new_name}** уже существует в системе!",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            return
+    
+    # Сохраняем цвет для новой роли
+    color = ROLE_COLORS.get(old_name, discord.Color.default())
+    
+    # Обновляем настройки
+    if new_points is not None and new_name is not None:
+        # Меняем и поинты, и название
+        del ROLE_SETTINGS[old_points]
+        ROLE_SETTINGS[new_points] = new_name
+        if old_name in ROLE_COLORS:
+            del ROLE_COLORS[old_name]
+        ROLE_COLORS[new_name] = color
+        
+        embed = discord.Embed(
+            title="✅ Роль обновлена",
+            description=f"Роль успешно изменена!",
+            color=COLORS['success']
+        )
+        embed.add_field(name="🔄 Было", value=f"**{old_name}** - {old_points} поинтов", inline=False)
+        embed.add_field(name="✨ Стало", value=f"**{new_name}** - {new_points} поинтов", inline=False)
+        
+    elif new_points is not None:
+        # Меняем только поинты
+        del ROLE_SETTINGS[old_points]
+        ROLE_SETTINGS[new_points] = old_name
+        
+        embed = discord.Embed(
+            title="✅ Роль обновлена",
+            description=f"Количество поинтов для роли **{old_name}** изменено!",
+            color=COLORS['success']
+        )
+        embed.add_field(name="🔄 Было", value=f"{old_points} поинтов", inline=True)
+        embed.add_field(name="✨ Стало", value=f"{new_points} поинтов", inline=True)
+        
+    elif new_name is not None:
+        # Меняем только название
+        ROLE_SETTINGS[old_points] = new_name
+        if old_name in ROLE_COLORS:
+            del ROLE_COLORS[old_name]
+        ROLE_COLORS[new_name] = color
+        
+        embed = discord.Embed(
+            title="✅ Роль обновлена",
+            description=f"Название роли изменено!",
+            color=COLORS['success'])
+        embed.add_field(name="🔄 Было", value=f"**{old_name}**", inline=True)
+        embed.add_field(name="✨ Стало", value=f"**{new_name}**", inline=True)
+        embed.add_field(name="💰 Поинты", value=f"{old_points}", inline=True)
+    
+    else:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Укажите новые поинты или новое название!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Показываем обновленную систему
+    roles_text = []
+    for p, name in sorted(ROLE_SETTINGS.items()):
+        roles_text.append(f"• **{name}** - {p} поинтов")
+    
+    embed.add_field(
+        name="📊 Обновленная система ролей",
+        value="\n".join(roles_text),
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+    
+    # Обновляем роли для всех участников
+    await update_all_member_roles(ctx.guild)
+
+@bot.command(name='setrolecolor')
+@is_admin()
+async def set_role_color(ctx, points: int, color: str):
+    """Установить цвет для роли (HEX код или название цвета)"""
+    global ROLE_COLORS
+    
+    # Проверяем, существует ли роль
+    if points not in ROLE_SETTINGS:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль за {points} поинтов не найдена!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    role_name = ROLE_SETTINGS[points]
+    
+    # Парсим цвет
+    try:
+        # Проверяем, является ли это HEX кодом
+        if color.startswith('#'):
+            color = color[1:]
+        
+        # Пробуем создать цвет
+        if color.lower() in ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'gold', 'pink', 'brown', 'black', 'white']:
+            # Предопределенные цвета
+            color_map = {
+                'red': discord.Color.red(),
+                'blue': discord.Color.blue(),
+                'green': discord.Color.green(),
+                'yellow': discord.Color.gold(),
+                'purple': discord.Color.purple(),
+                'orange': discord.Color.orange(),
+                'gold': discord.Color.gold(),
+                'pink': discord.Color.magenta(),
+                'brown': discord.Color.dark_orange(),
+                'black': discord.Color.dark_grey(),
+                'white': discord.Color.lighter_grey()
+            }
+            new_color = color_map.get(color.lower(), discord.Color.default())
+        else:
+            # Пробуем как HEX
+            new_color = discord.Color(int(color, 16))
+    except:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Неверный формат цвета. Используйте HEX код (например, #FF0000) или название цвета (red, blue, green и т.д.)",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Сохраняем цвет
+    ROLE_COLORS[role_name] = new_color
+    
+    # Обновляем цвет роли на сервере
+    discord_role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if discord_role:
+        try:
+            await discord_role.edit(color=new_color, reason="Изменение цвета роли")
+        except:
+            pass
+    
+    embed = discord.Embed(
+        title="✅ Цвет роли изменен",
+        description=f"Для роли **{role_name}** установлен новый цвет!",
+        color=new_color
+    )
+    
+    embed.add_field(name="🎭 Роль", value=f"**{role_name}**", inline=True)
+    embed.add_field(name="💰 Поинты", value=f"{points}", inline=True)
+    embed.add_field(name="🎨 Цвет", value=f"`{new_color}`", inline=True)
+    
+    # Показываем пример цвета
+    embed.add_field(name="👁️ Пример", value="████████", inline=False)
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='reorderroles')
+@is_admin()
+async def reorder_roles(ctx):
+    """Перенумеровать роли (пересоздать с правильной иерархией)"""
+    
+    embed = discord.Embed(
+        title="⚠️ Реконструкция ролей",
+        description="Это действие пересоздаст все роли за поинты в правильном порядке иерархии.",
+        color=COLORS['warning']
+    )
+    
+    embed.add_field(
+        name="Что будет сделано:",
+        value="• Все существующие роли за поинты будут удалены\n"
+              "• Роли будут созданы заново в правильном порядке\n"
+              "• Цвета ролей будут сохранены\n"
+              "• Все участники получат свои роли обратно",
+        inline=False
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        status_embed = discord.Embed(
+            title="⏳ Реконструкция ролей...",
+            description="Начинаю пересоздание ролей...",
+            color=COLORS['info']
+        )
+        status_msg = await interaction.followup.send(embed=status_embed)
+        
+        # Собираем информацию о текущих ролях участников
+        member_roles = {}
+        for member in ctx.guild.members:
+            for role_name in ROLE_SETTINGS.values():
+                role = discord.utils.get(ctx.guild.roles, name=role_name)
+                if role and role in member.roles:
+                    if member.id not in member_roles:
+                        member_roles[member.id] = []
+                    member_roles[member.id].append(role_name)
+        
+        # Удаляем все существующие роли за поинты
+        deleted_count = 0
+        for role_name in ROLE_SETTINGS.values():
+            role = discord.utils.get(ctx.guild.roles, name=role_name)
+            if role:
+                try:
+                    await role.delete(reason="Реконструкция системы ролей")
+                    deleted_count += 1
+                except:
+                    pass
+        
+        # Создаем роли заново в правильном порядке (от меньших поинтов к большим)
+        created_roles = {}
+        for points, role_name in sorted(ROLE_SETTINGS.items()):
+            color = ROLE_COLORS.get(role_name, discord.Color.default())
+            try:
+                new_role = await ctx.guild.create_role(
+                    name=role_name,
+                    color=color,
+                    mentionable=True,
+                    reason="Реконструкция системы ролей"
+                )
+                created_roles[role_name] = new_role
+            except Exception as e:
+                logger.error(f"Ошибка создания роли {role_name}: {e}")
+        
+        # Выдаем роли участникам
+        assigned_count = 0
+        for member in ctx.guild.members:
+            if member.id in member_roles:
+                roles_to_add = []
+                for role_name in member_roles[member.id]:
+                    if role_name in created_roles:
+                        roles_to_add.append(created_roles[role_name])
+                
+                if roles_to_add:
+                    try:
+                        await member.add_roles(*roles_to_add, reason="Восстановление ролей после реконструкции")
+                        assigned_count += 1
+                    except:
+                        pass
+        
+        # Упорядочиваем роли (опционально, если бот имеет права)
+        try:
+            # Получаем все роли
+            all_roles = ctx.guild.roles
+            # Сортируем роли по поинтам (высшие поинты - выше в иерархии)
+            role_order = []
+            for points, role_name in sorted(ROLE_SETTINGS.items(), reverse=True):
+                if role_name in created_roles:
+                    role_order.append(created_roles[role_name])
+            
+            # Добавляем остальные роли в конец
+            other_roles = [r for r in all_roles if r.name not in ROLE_SETTINGS.values() and not r.managed and r != ctx.guild.default_role]
+            role_order.extend(other_roles)
+            
+            # Применяем новый порядок (если есть права)
+            if ctx.guild.me.guild_permissions.manage_roles:
+                await ctx.guild.edit_role_positions(positions={role: i for i, role in enumerate(role_order)})
+        except:
+            pass
+        
+        final_embed = discord.Embed(
+            title="✅ Реконструкция завершена",
+            description="Система ролей успешно пересоздана!",
+            color=COLORS['success']
+        )
+        
+        final_embed.add_field(
+            name="📊 Статистика",
+            value=f"• Удалено ролей: {deleted_count}\n"
+                  f"• Создано ролей: {len(created_roles)}\n"
+                  f"• Восстановлено ролей у участников: {assigned_count}",
+            inline=False
+        )
+        
+        await status_msg.edit(embed=final_embed)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Реконструкция отменена",
+            description="Система ролей не была изменена.",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='saveroles')
+@is_admin()
+async def save_roles_config(ctx):
+    """Сохранить текущую конфигурацию ролей в файл"""
+    
+    # Создаем текстовый файл с конфигурацией
+    filename = f"roles_config_{ctx.guild.id}_{int(datetime.now().timestamp())}.txt"
+    
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write("=== КОНФИГУРАЦИЯ РОЛЕЙ ЗА ПОИНТЫ ===\n\n")
+        f.write(f"Сервер: {ctx.guild.name} (ID: {ctx.guild.id})\n")
+        f.write(f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Экспортировал: {ctx.author.display_name} (ID: {ctx.author.id})\n\n")
+        
+        f.write("=== РОЛИ ===\n")
+        for points, role_name in sorted(ROLE_SETTINGS.items()):
+            color = ROLE_COLORS.get(role_name, discord.Color.default())
+            f.write(f"{points}: {role_name} (цвет: {color})\n")
+        
+        f.write("\n=== КОМАНДЫ ДЛЯ ВОССТАНОВЛЕНИЯ ===\n")
+        for points, role_name in sorted(ROLE_SETTINGS.items()):
+            color = ROLE_COLORS.get(role_name, discord.Color.default())
+            f.write(f"!addrole {points} {role_name}\n")
+            if color != discord.Color.default():
+                f.write(f"!setrolecolor {points} {str(color)}\n")
+    
+    # Отправляем файл
+    file = discord.File(filename)
+    embed = discord.Embed(
+        title="✅ Конфигурация ролей сохранена",
+        description="Текущая конфигурация ролей экспортирована в файл.",
+        color=COLORS['success']
+    )
+    
+    await safe_send(ctx, embed=embed, file=file)
+    
+    # Удаляем временный файл
+    os.remove(filename)
+
+# Вспомогательная функция для обновления ролей всех участников
+async def update_all_member_roles(guild):
+    """Обновить роли для всех участников сервера"""
+    try:
+        logger.info(f"Начинаю массовое обновление ролей на сервере {guild.name}")
+        
+        for member in guild.members:
+            try:
+                await check_and_assign_roles(member)
+                await asyncio.sleep(0.5)  # Небольшая задержка чтобы не забанили за спам API
+            except Exception as e:
+                logger.error(f"Ошибка обновления ролей для {member.display_name}: {e}")
+        
+        logger.info(f"Массовое обновление ролей завершено на сервере {guild.name}")
+    except Exception as e:
+        logger.error(f"Ошибка массового обновления ролей: {e}")
+
+@bot.command(name='updateroles')
+@is_admin()
+async def update_all_roles(ctx):
+    """Обновить роли для всех участников сервера"""
+    
+    embed = discord.Embed(
+        title="⏳ Обновление ролей",
+        description=f"Начинаю обновление ролей для {len(ctx.guild.members)} участников...",
+        color=COLORS['info']
+    )
+    
+    message = await safe_send(ctx, embed=embed)
+    
+    # Запускаем обновление
+    await update_all_member_roles(ctx.guild)
+    
+    final_embed = discord.Embed(
+        title="✅ Обновление завершено",
+        description=f"Роли всех участников сервера обновлены в соответствии с их поинтами.",
+        color=COLORS['success']
+    )
+    
+    if message:
+        await safe_edit(message, embed=final_embed)
+    else:
+        await safe_send(ctx, embed=final_embed)
+
+# Добавьте эти новые команды после существующих команд (например, после команды clearclans)
+
+# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ АДМИНСКИМИ РОЛЯМИ ==========
+
+@bot.command(name='addadminrole')
+@is_admin()
+async def add_admin_role(ctx, role: discord.Role):
+    """Добавить роль в список админских ролей"""
+    global ADMIN_ROLE_IDS
+    
+    # Проверяем, не добавлена ли уже эта роль
+    if role.id in ADMIN_ROLE_IDS:
+        embed = discord.Embed(
+            title="⚠️ Роль уже в списке",
+            description=f"Роль {role.mention} уже есть в списке админских ролей!",
+            color=COLORS['warning']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Добавляем роль в список
+    ADMIN_ROLE_IDS.append(role.id)
+    
+    # Сохраняем обновленный список в .env файл (опционально)
+    try:
+        # Читаем текущий .env файл
+        env_path = '.env'
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+            
+            # Обновляем или добавляем строку с ADMIN_ROLE_IDS
+            admin_roles_str = ','.join(str(id) for id in ADMIN_ROLE_IDS)
+            found = False
+            for i, line in enumerate(lines):
+                if line.startswith('ADMIN_ROLE_IDS='):
+                    lines[i] = f'ADMIN_ROLE_IDS={admin_roles_str}\n'
+                    found = True
+                    break
+            
+            if not found:
+                lines.append(f'ADMIN_ROLE_IDS={admin_roles_str}\n')
+            
+            # Записываем обратно
+            with open(env_path, 'w') as f:
+                f.writelines(lines)
+            
+            # Перезагружаем переменные окружения
+            load_dotenv(override=True)
+    except Exception as e:
+        logger.warning(f"Не удалось обновить .env файл: {e}")
+    
+    embed = discord.Embed(
+        title="✅ Роль добавлена",
+        description=f"Роль {role.mention} добавлена в список админских ролей!",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(
+        name="📊 Текущие админские роли",
+        value="\n".join([f"• <@&{role_id}>" for role_id in ADMIN_ROLE_IDS]) or "Нет ролей",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"Всего ролей: {len(ADMIN_ROLE_IDS)}")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='removeadminrole')
+@is_admin()
+async def remove_admin_role(ctx, role: discord.Role):
+    """Удалить роль из списка админских ролей"""
+    global ADMIN_ROLE_IDS
+    
+    # Проверяем, есть ли роль в списке
+    if role.id not in ADMIN_ROLE_IDS:
+        embed = discord.Embed(
+            title="❌ Роль не найдена",
+            description=f"Роль {role.mention} не найдена в списке админских ролей!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Удаляем роль из списка
+    ADMIN_ROLE_IDS.remove(role.id)
+    
+    # Сохраняем обновленный список в .env файл (опционально)
+    try:
+        env_path = '.env'
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+            
+            # Обновляем строку с ADMIN_ROLE_IDS
+            admin_roles_str = ','.join(str(id) for id in ADMIN_ROLE_IDS)
+            for i, line in enumerate(lines):
+                if line.startswith('ADMIN_ROLE_IDS='):
+                    lines[i] = f'ADMIN_ROLE_IDS={admin_roles_str}\n'
+                    break
+            
+            # Записываем обратно
+            with open(env_path, 'w') as f:
+                f.writelines(lines)
+            
+            # Перезагружаем переменные окружения
+            load_dotenv(override=True)
+    except Exception as e:
+        logger.warning(f"Не удалось обновить .env файл: {e}")
+    
+    embed = discord.Embed(
+        title="✅ Роль удалена",
+        description=f"Роль {role.mention} удалена из списка админских ролей!",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(
+        name="📊 Текущие админские роли",
+        value="\n".join([f"• <@&{role_id}>" for role_id in ADMIN_ROLE_IDS]) or "Нет ролей",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"Всего ролей: {len(ADMIN_ROLE_IDS)}")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='listadminroles')
+async def list_admin_roles(ctx):
+    """Показать список всех админских ролей"""
+    
+    if not ADMIN_ROLE_IDS:
+        embed = discord.Embed(
+            title="📋 Список админских ролей",
+            description="В данный момент нет назначенных админских ролей.\n"
+                       f"Используйте `{PREFIX}addadminrole @роль` чтобы добавить роль.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Список админских ролей",
+        description=f"Всего ролей: **{len(ADMIN_ROLE_IDS)}**",
+        color=COLORS['info']
+    )
+    
+    # Получаем информацию о каждой роли
+    roles_info = []
+    for role_id in ADMIN_ROLE_IDS:
+        role = ctx.guild.get_role(role_id)
+        if role:
+            roles_info.append(f"• {role.mention} (ID: `{role_id}`)")
+        else:
+            roles_info.append(f"• Роль с ID `{role_id}` (не найдена на сервере)")
+    
+    embed.add_field(
+        name="🎭 Роли",
+        value="\n".join(roles_info) if roles_info else "Нет доступных ролей",
+        inline=False
+    )
+    
+    # Информация о правах
+    embed.add_field(
+        name="ℹ️ Информация",
+        value="Владельцы этих ролей имеют доступ ко всем админским командам бота.\n"
+              f"Используйте `{PREFIX}addadminrole @роль` чтобы добавить новую роль.\n"
+              f"Используйте `{PREFIX}removeadminrole @роль` чтобы удалить роль.",
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='clearadminroles')
+@is_admin()
+async def clear_admin_roles(ctx):
+    """Удалить ВСЕ админские роли"""
+    global ADMIN_ROLE_IDS
+    
+    if not ADMIN_ROLE_IDS:
+        embed = discord.Embed(
+            title="ℹ️ Нет ролей",
+            description="Список админских ролей уже пуст!",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Запрашиваем подтверждение
+    embed = discord.Embed(
+        title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
+        description=f"Вы уверены, что хотите удалить ВСЕ админские роли (**{len(ADMIN_ROLE_IDS)}** шт.)?\n"
+                   "После этого только пользователи с правами администратора Discord смогут использовать админские команды!",
+        color=COLORS['error']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        nonlocal ADMIN_ROLE_IDS
+        old_count = len(ADMIN_ROLE_IDS)
+        ADMIN_ROLE_IDS = []
+        
+        # Обновляем .env файл
+        try:
+            env_path = '.env'
+            if os.path.exists(env_path):
+                with open(env_path, 'r') as f:
+                    lines = f.readlines()
+                
+                for i, line in enumerate(lines):
+                    if line.startswith('ADMIN_ROLE_IDS='):
+                        lines[i] = 'ADMIN_ROLE_IDS=\n'
+                        break
+                
+                with open(env_path, 'w') as f:
+                    f.writelines(lines)
+                
+                load_dotenv(override=True)
+        except Exception as e:
+            logger.warning(f"Не удалось обновить .env файл: {e}")
+        
+        confirm_embed = discord.Embed(
+            title="✅ Все админские роли удалены",
+            description=f"Удалено {old_count} админских ролей.\n"
+                       "Только пользователи с правами администратора Discord могут использовать админские команды.",
+            color=COLORS['success']
+        )
+        await interaction.response.edit_message(embed=confirm_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Удаление отменено",
+            description="Список админских ролей не был изменен.",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+# Не забудьте также обновить команду help, добавив информацию о новых командах
 # ========== КОМАНДА HELP ==========
 
 @bot.command(name='help')
@@ -2836,7 +3876,7 @@ async def help_command(ctx):
         
         # ========== БЫСТРЫЕ КОМАНДЫ ДЛЯ КОНКРЕТНОЙ РОЛИ ==========
         embed.add_field(
-            name="⚡ **Быстрые команды для роли (ID: 1431589898183512129)**",
+            name="⚡ **Быстрые команды для блокировочной роли**",
             value=f"```{PREFIX}lock [тип]``` - Быстрая блокировка каналов для роли\n"
                   f"```{PREFIX}unlock``` - Быстрая разблокировка каналов для роли\n"
                   f"**Типы блокировки:** `send` (только писать), `view` (скрыть), `both` (полная)",
@@ -2917,10 +3957,7 @@ async def help_command(ctx):
     
     embed.add_field(
         name="ℹ️ **Информация о системе**",
-        value=f"**🤖 Бот:** {bot.user.name}\n"
-              f"**📊 Серверов:** {len(bot.guilds)}\n"
-              f"**🌐 Порт веб-сервера:** {PORT}\n"
-              f"**🗄️ База данных:** PostgreSQL\n"
+        value=f"**📊 Серверов:** {len(bot.guilds)}\n"
               f"**🎭 Ролей за поинты:** {roles_count} ({roles_range})\n"
               f"**👑 Админские роли:**\n" + "\n".join(admin_roles_text),
         inline=False
@@ -2942,12 +3979,11 @@ async def help_command(ctx):
     # ========== ПОЛЕЗНЫЕ ССЫЛКИ ==========
     embed.add_field(
         name="🔗 **Полезные ссылки**",
-        value="• [Документация Discord.py](https://discordpy.readthedocs.io/)\n"
-              "• [Поддержка](https://discord.gg/your-server)\n"
-              f"• Версия бота: v2.0",
+        value="• [Поддержка](https://t.me/Agentgnd)\n"
+              f"• Версия бота: v1.3",
         inline=False
     )
-    
+
     # ========== ФУТЕР ==========
     embed.set_footer(
         text=f"Запрошено: {ctx.author.display_name} | Всего команд: {len(bot.commands)} | {datetime.now().strftime('%d.%m.%Y %H:%M')}",
