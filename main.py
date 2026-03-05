@@ -3595,6 +3595,54 @@ async def update_all_roles(ctx):
 
 # Добавьте эти новые команды после существующих команд (например, после команды clearclans)
 
+
+@bot.command(name='reloadroles')
+@is_admin()
+async def reload_roles_from_db(ctx):
+    """Перезагрузить настройки ролей из базы данных"""
+    global ROLE_SETTINGS, ROLE_COLORS
+    
+    try:
+        loaded_settings, loaded_colors = await db.load_role_settings(ctx.guild.id)
+        
+        if loaded_settings:
+            ROLE_SETTINGS = loaded_settings
+            ROLE_COLORS = loaded_colors
+            
+            embed = discord.Embed(
+                title="✅ Роли перезагружены",
+                description=f"Загружено **{len(loaded_settings)}** ролей из базы данных",
+                color=COLORS['success']
+            )
+            
+            # Показываем загруженные роли
+            roles_text = []
+            for p, name in sorted(ROLE_SETTINGS.items()):
+                roles_text.append(f"• **{name}** - {p} поинтов")
+            
+            embed.add_field(
+                name="📊 Загруженные роли",
+                value="\n".join(roles_text) if roles_text else "Нет ролей",
+                inline=False
+            )
+        else:
+            embed = discord.Embed(
+                title="ℹ️ Нет сохраненных ролей",
+                description="В базе данных нет сохраненных настроек ролей для этого сервера",
+                color=COLORS['info']
+            )
+        
+        await safe_send(ctx, embed=embed)
+        
+    except Exception as e:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Не удалось загрузить роли из БД: {str(e)[:100]}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+
+
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ АДМИНСКИМИ РОЛЯМИ ==========
 
 @bot.command(name='addadminrole')
