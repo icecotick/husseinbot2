@@ -151,7 +151,17 @@ class Database:
                     UNIQUE(guild_id, channel_id)
                 )
             ''')
-            
+            # Таблица для хранения настроек ролей за поинты
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS role_settings (
+                    guild_id BIGINT,
+                    points INTEGER,
+                    role_name TEXT,
+                    role_color TEXT,
+                    PRIMARY KEY (guild_id, points)
+                )
+            ''')
+
             logger.info("✅ Таблицы пользователей и каналов инициализированы")
     
     async def get_user_points(self, user_id: int, guild_id: int) -> int:
@@ -379,6 +389,30 @@ class Database:
         """Удалить все блокировки на сервере"""
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM locked_channels WHERE guild_id = $1', guild_id)
+
+
+    async def load_role_settings(self, guild_id: int):
+    """Загрузить настройки ролей для сервера"""
+    async with self.pool.acquire() as conn:
+        rows = await conn.fetch(
+            'SELECT points, role_name, role_color FROM role_settings WHERE guild_id = $1 ORDER BY points',
+            guild_id
+        )
+        return {row['points']: row['role_name'] for row in rows}
+
+async def save_role_settings(self, guild_id: int, role_settings: dict):
+    """Сохранить настройки ролей для сервера"""
+    async with self.pool.acquire() as conn:
+        # Сначала удаляем старые настройки
+        await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
+        
+        # Сохраняем новые
+        for points, role_name in role_settings.items():
+            await conn.execute(
+                'INSERT INTO role_settings (guild_id, points, role_name) VALUES ($1, $2, $3)',
+                guild_id, points, role_name
+            )
+
 
 # ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
 
