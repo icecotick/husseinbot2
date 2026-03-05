@@ -3073,13 +3073,20 @@ async def remove_role_for_points(ctx, points: int):
         if role_name in ROLE_COLORS:
             del ROLE_COLORS[role_name]
         
-        # Удаляем саму роль на сервере (опционально)
+        # СОХРАНЯЕМ В БАЗУ ДАННЫХ
+        try:
+            await db.save_role_settings(ctx.guild.id, ROLE_SETTINGS, ROLE_COLORS)
+            logger.info(f"✅ Настройки ролей обновлены в БД для сервера {ctx.guild.id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
+        
+        # Удаляем саму роль на сервере
         discord_role = discord.utils.get(ctx.guild.roles, name=role_name)
         if discord_role:
             try:
                 await discord_role.delete(reason="Роль удалена из системы поинтов")
-            except:
-                pass
+            except Exception as e:
+                logger.error(f"❌ Ошибка удаления роли с сервера: {e}")
         
         confirm_embed = discord.Embed(
             title="✅ Роль удалена",
