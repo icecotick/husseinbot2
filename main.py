@@ -2996,6 +2996,19 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
     # Автоматически назначаем цвет (случайный или по умолчанию)
     ROLE_COLORS[role_name] = discord.Color.random()
     
+    # СОХРАНЯЕМ В БАЗУ ДАННЫХ
+    try:
+        await db.save_role_settings(ctx.guild.id, ROLE_SETTINGS, ROLE_COLORS)
+        logger.info(f"✅ Настройки ролей сохранены в БД для сервера {ctx.guild.id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
+        embed = discord.Embed(
+            title="⚠️ Предупреждение",
+            description="Роль добавлена, но не сохранилась в базу данных!",
+            color=COLORS['warning']
+        )
+        await safe_send(ctx, embed=embed)
+    
     # Создаем embed с подтверждением
     embed = discord.Embed(
         title="✅ Роль добавлена",
