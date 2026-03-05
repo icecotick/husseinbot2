@@ -390,28 +390,67 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM locked_channels WHERE guild_id = $1', guild_id)
 
+     # Добавьте эти методы в класс Database (после существующих методов)
 
-    async def load_role_settings(self, guild_id: int):
-    """Загрузить настройки ролей для сервера"""
-    async with self.pool.acquire() as conn:
-        rows = await conn.fetch(
-            'SELECT points, role_name, role_color FROM role_settings WHERE guild_id = $1 ORDER BY points',
-            guild_id
-        )
-        return {row['points']: row['role_name'] for row in rows}
-
-async def save_role_settings(self, guild_id: int, role_settings: dict):
-    """Сохранить настройки ролей для сервера"""
-    async with self.pool.acquire() as conn:
+    async def save_role_settings(self, guild_id: int, role_settings: dict, role_colors: dict):
+        """Сохранить настройки ролей для сервера"""
+        async with self.pool.acquire() as conn:
+            # Создаем таблицу если её нет
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS role_settings (
+                    guild_id BIGINT,
+                    points INTEGER,
+                    role_name TEXT,
+                    role_color TEXT,
+                    PRIMARY KEY (guild_id, points)
+                )
+            ''')
+        
         # Сначала удаляем старые настройки
-        await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
+            await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
         
         # Сохраняем новые
-        for points, role_name in role_settings.items():
-            await conn.execute(
-                'INSERT INTO role_settings (guild_id, points, role_name) VALUES ($1, $2, $3)',
-                guild_id, points, role_name
+            for points, role_name in role_settings.items():
+                color = str(role_colors.get(role_name, discord.Color.default()))
+                await conn.execute(
+                    'INSERT INTO role_settings (guild_id, points, role_name, role_color) VALUES ($1, $2, $3, $4)',
+                    guild_id, points, role_name, color
+                )
+            logger.info(f"✅ Настройки ролей сохранены для сервера {guild_id}")
+
+    async def load_role_settings(self, guild_id: int):
+        """Загрузить настройки ролей для сервера"""
+        async with self.pool.acquire() as conn:
+            # Создаем таблицу если её нет
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS role_settings (
+                    guild_id BIGINT,
+                    points INTEGER,
+                    role_name TEXT,
+                    role_color TEXT,
+                    PRIMARY KEY (guild_id, points)
+                )
+            ''')
+        
+            rows = await conn.fetch(
+                'SELECT points, role_name, role_color FROM role_settings WHERE guild_id = $1 ORDER BY points',
+                guild_id
             )
+        
+            role_settings = {}
+            role_colors = {}
+        
+            for row in rows:
+                role_settings[row['points']] = row['role_name']
+                # Парсим цвет обратно в discord.Color
+                try:
+                    # Просто сохраняем название цвета, потом установим при создании роли
+                    role_colors[row['role_name']] = row['role_color']
+                except:
+                    role_colors[row['role_name']] = str(discord.Color.default())
+            
+            return role_settings, role_colors
+
 
 
 # ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
