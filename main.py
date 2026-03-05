@@ -1596,37 +1596,48 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     embed.add_field(name="Баланс", value=f"**{points}** поинтов", inline=True)
     embed.add_field(name="Позиция в рейтинге", value=f"**#{position}**", inline=True)
     
-    # Система ролей
+    # Система ролей - теперь используем ТОЛЬКО текущие роли из ROLE_SETTINGS
     roles_text = []
-    for required_points, role_name in sorted(ROLE_SETTINGS.items()):
-        status = "✅" if points >= required_points else "⏳"
-        roles_text.append(f"{status} **{role_name}** - {required_points} поинтов")
+    # Сортируем роли по количеству поинтов
+    sorted_roles = sorted(ROLE_SETTINGS.items())
     
-    embed.add_field(
-        name="🏅 Система ролей",
-        value="\n".join(roles_text),
-        inline=False
-    )
-    
-    # Следующая роль
-    next_role = None
-    points_needed = 0
-    for required_points, role_name in sorted(ROLE_SETTINGS.items()):
-        if points < required_points:
-            next_role = role_name
-            points_needed = required_points - points
-            break
-    
-    if next_role:
+    if sorted_roles:  # Проверяем, есть ли вообще роли
+        for required_points, role_name in sorted_roles:
+            status = "✅" if points >= required_points else "⏳"
+            roles_text.append(f"{status} **{role_name}** - {required_points} поинтов")
+        
         embed.add_field(
-            name="Следующая цель",
-            value=f"**{next_role}** (нужно ещё {points_needed} поинтов)",
+            name="🏅 Система ролей",
+            value="\n".join(roles_text),
             inline=False
         )
-    elif points > 0:
+        
+        # Следующая роль
+        next_role = None
+        points_needed = 0
+        for required_points, role_name in sorted_roles:
+            if points < required_points:
+                next_role = role_name
+                points_needed = required_points - points
+                break
+        
+        if next_role:
+            embed.add_field(
+                name="Следующая цель",
+                value=f"**{next_role}** (нужно ещё {points_needed} поинтов)",
+                inline=False
+            )
+        elif points > 0 and sorted_roles:
+            embed.add_field(
+                name="🎉 Поздравляем!",
+                value="Вы достигли максимальной роли!",
+                inline=False
+            )
+    else:
+        # Если ролей нет, показываем сообщение
         embed.add_field(
-            name="🎉 Поздравляем!",
-            value="Вы достигли максимальной роли!",
+            name="🏅 Система ролей",
+            value="⚙️ Система ролей еще не настроена администратором",
             inline=False
         )
     
