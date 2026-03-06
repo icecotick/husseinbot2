@@ -58,27 +58,32 @@ COLORS = {
     'admin': discord.Color.purple()
 }
 
-# Настройки ролей (поинты: название_роли)
-ROLE_SETTINGS = {
+# Настройки ролей для каждого сервера (guild_id: {points: role_name})
+GUILD_ROLE_SETTINGS = {}
+
+# Цвета ролей для каждого сервера (guild_id: {role_name: color})
+GUILD_ROLE_COLORS = {}
+
+# Стандартные настройки для новых серверов
+DEFAULT_ROLE_SETTINGS = {
     200: 'raider newgen',
     400: 'raider scout', 
     800: 'raider striker', 
     1200: 'raider heavy', 
     1600: 'raider legend',
-    2400: 'raider who lives on raids ', 
+    2400: 'raider who lives on raids', 
     3200: 'raid moderator', 
     4000: 'raider commander'
 }
 
-# Цвета для ролей
-ROLE_COLORS = {
+DEFAULT_ROLE_COLORS = {
     'raider newgen': discord.Color.green(),
     'raider scout': discord.Color.blue(),
     'raider striker': discord.Color.orange(),
     'raider heavy': discord.Color.yellow(),
     'raider legend': discord.Color.purple(),
     'raider who lives on raids': discord.Color.blue(),
-    'raider moderator': discord.Color.red(),
+    'raid moderator': discord.Color.red(),
     'raider commander': discord.Color.gold()
 }
 
