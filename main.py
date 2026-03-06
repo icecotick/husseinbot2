@@ -156,6 +156,7 @@ class Database:
                     UNIQUE(guild_id, channel_id)
                 )
             ''')
+            
             # Таблица для хранения настроек ролей за поинты
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS role_settings (
@@ -166,21 +167,9 @@ class Database:
                     PRIMARY KEY (guild_id, points)
                 )
             ''')
-
-            logger.info("✅ Таблицы пользователей и каналов инициализированы")
-
-
-
-    def get_guild_settings(guild_id: int):
-    """Получить настройки ролей для конкретного сервера"""
-    if guild_id not in GUILD_ROLE_SETTINGS:
-        # Если для сервера нет настроек, создаем копию стандартных
-        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
-        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
-    return GUILD_ROLE_SETTINGS[guild_id], GUILD_ROLE_COLORS[guild_id]
-
-
-
+            
+            logger.info("✅ Все таблицы инициализированы")
+    
     async def get_user_points(self, user_id: int, guild_id: int) -> int:
         """Получить количество поинтов пользователя"""
         async with self.pool.acquire() as conn:
@@ -406,65 +395,39 @@ class Database:
         """Удалить все блокировки на сервере"""
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM locked_channels WHERE guild_id = $1', guild_id)
-
-     # Добавьте эти методы в класс Database (после существующих методов)
-
+    
+    # Новые методы для работы с ролями
     async def save_role_settings(self, guild_id: int, role_settings: dict, role_colors: dict):
-    """Сохранить настройки ролей для конкретного сервера"""
-    async with self.pool.acquire() as conn:
-        # Создаем таблицу если её нет
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS role_settings (
-                guild_id BIGINT,
-                points INTEGER,
-                role_name TEXT,
-                role_color TEXT,
-                PRIMARY KEY (guild_id, points)
-            )
-        ''')
-        
-        # Сначала удаляем старые настройки для этого сервера
-        await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
-        
-        # Сохраняем новые
-        for points, role_name in role_settings.items():
-            color = str(role_colors.get(role_name, discord.Color.default()))
-            await conn.execute(
-                'INSERT INTO role_settings (guild_id, points, role_name, role_color) VALUES ($1, $2, $3, $4)',
-                guild_id, points, role_name, color
-            )
-        logger.info(f"✅ Настройки ролей сохранены для сервера {guild_id}")
-
-
+        """Сохранить настройки ролей для конкретного сервера"""
+        async with self.pool.acquire() as conn:
+            # Сначала удаляем старые настройки для этого сервера
+            await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
+            
+            # Сохраняем новые
+            for points, role_name in role_settings.items():
+                color = str(role_colors.get(role_name, discord.Color.default()))
+                await conn.execute(
+                    'INSERT INTO role_settings (guild_id, points, role_name, role_color) VALUES ($1, $2, $3, $4)',
+                    guild_id, points, role_name, color
+                )
+            logger.info(f"✅ Настройки ролей сохранены для сервера {guild_id}")
     
     async def load_role_settings(self, guild_id: int):
-    """Загрузить настройки ролей для конкретного сервера"""
-    async with self.pool.acquire() as conn:
-        # Создаем таблицу если её нет
-        await conn.execute('''
-            CREATE TABLE IF NOT EXISTS role_settings (
-                guild_id BIGINT,
-                points INTEGER,
-                role_name TEXT,
-                role_color TEXT,
-                PRIMARY KEY (guild_id, points)
+        """Загрузить настройки ролей для конкретного сервера"""
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                'SELECT points, role_name, role_color FROM role_settings WHERE guild_id = $1 ORDER BY points',
+                guild_id
             )
-        ''')
-        
-        rows = await conn.fetch(
-            'SELECT points, role_name, role_color FROM role_settings WHERE guild_id = $1 ORDER BY points',
-            guild_id
-        )
-        
-        role_settings = {}
-        role_colors = {}
-        
-        for row in rows:
-            role_settings[row['points']] = row['role_name']
-            # Сохраняем цвет как строку, потом преобразуем обратно
-            role_colors[row['role_name']] = row['role_color']
-        
-        return role_settings, role_colors
+            
+            role_settings = {}
+            role_colors = {}
+            
+            for row in rows:
+                role_settings[row['points']] = row['role_name']
+                role_colors[row['role_name']] = row['role_color']
+            
+            return role_settings, role_colors
 
 # ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
 
@@ -651,6 +614,14 @@ class ClanManager:
         }
         return emojis.get(clan_type, '📌')
 
+# Вспомогательная функция для получения настроек сервера
+def get_guild_settings(guild_id: int):
+    """Получить настройки ролей для конкретного сервера"""
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        # Если для сервера нет настроек, создаем копию стандартных
+        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    return GUILD_ROLE_SETTINGS[guild_id], GUILD_ROLE_COLORS[guild_id]
 
 # Создаем экземпляр БД
 db = Database()
@@ -826,14 +797,13 @@ async def check_and_assign_roles(member: discord.Member):
     except Exception as e:
         logger.error(f'Ошибка в check_and_assign_roles: {e}')
 
-
 async def send_role_notification(member: discord.Member, role_name: str, points: int):
     """Отправка уведомления о получении новой роли"""
     try:
         embed = discord.Embed(
             title="🎉 Новая роль получена!",
             description=f"**{member.display_name}** получил(а) новую роль!",
-            color=ROLE_COLORS.get(role_name, discord.Color.green())
+            color=discord.Color.green()
         )
         
         embed.add_field(name="Роль", value=f"`{role_name}`", inline=True)
@@ -1029,7 +999,7 @@ async def on_ready():
                     for role_name, color_str in loaded_colors.items():
                         try:
                             # Пробуем распарсить цвет
-                            if color_str.startswith('#'):
+                            if color_str and color_str.startswith('#'):
                                 color_int = int(color_str[1:], 16)
                                 colors[role_name] = discord.Color(color_int)
                             else:
@@ -1071,7 +1041,6 @@ async def on_ready():
     logger.info("🚀 Бот полностью готов к работе!")
     logger.info(f"📡 Веб-сервер доступен по адресу: http://0.0.0.0:{PORT}/")
 
-
 @bot.event
 async def on_guild_join(guild):
     """Событие при добавлении бота на новый сервер"""
@@ -1085,7 +1054,6 @@ async def on_guild_join(guild):
         logger.info(f"✅ Созданы стандартные настройки ролей для нового сервера {guild.name}")
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения настроек для нового сервера {guild.name}: {e}")
-
 
 # ========== КОМАНДЫ ==========
 
@@ -1807,9 +1775,12 @@ async def leaderboard(ctx, page: int = 1):
         
         medal = medals[i-1] if i <= len(medals) else f"{i}."
         
+        # Получаем настройки ролей для этого сервера
+        role_settings, _ = get_guild_settings(guild_id)
+        
         # Определяем роль
         user_role = "Нет роли"
-        for required_points, role_name in sorted(ROLE_SETTINGS.items(), reverse=True):
+        for required_points, role_name in sorted(role_settings.items(), reverse=True):
             if record['points'] >= required_points:
                 user_role = role_name
                 break
@@ -1837,20 +1808,30 @@ async def leaderboard(ctx, page: int = 1):
 @bot.command(name='roles')
 async def show_roles(ctx):
     """Показать систему ролей"""
+    guild_id = ctx.guild.id
+    role_settings, role_colors = get_guild_settings(guild_id)
+    
     embed = discord.Embed(
         title="🏅 Система ролей",
         description="Роли выдаются автоматически при достижении определенного количества поинтов",
         color=COLORS['points']
     )
     
-    for required_points, role_name in sorted(ROLE_SETTINGS.items()):
-        color = ROLE_COLORS.get(role_name, discord.Color.default())
-        color_block = f"`{str(color).upper()}`"
-        
+    if role_settings:
+        for required_points, role_name in sorted(role_settings.items()):
+            color = role_colors.get(role_name, discord.Color.default())
+            color_block = f"`{str(color)}`"
+            
+            embed.add_field(
+                name=f"🎖️ {role_name}",
+                value=f"**{required_points}** поинтов\nЦвет: {color_block}",
+                inline=True
+            )
+    else:
         embed.add_field(
-            name=f"🎖️ {role_name}",
-            value=f"**{required_points}** поинтов\nЦвет: {color_block}",
-            inline=True
+            name="ℹ️ Информация",
+            value="Система ролей еще не настроена",
+            inline=False
         )
     
     admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
@@ -1974,14 +1955,9 @@ async def raid_command(ctx, clan: str, link: str):
     )
     await safe_send(ctx, embed=confirm_embed)
 
-
-
 # Хранилище последней использованной роли для каждого сервера
 last_locked_role = {}  # {guild_id: role_id}
 
-
-
-# ЗАМЕНИТЕ существующую команду !lockrole на эту (или добавьте, если её нет)
 @bot.command(name='lockrole')
 @is_admin()
 async def lockrole_command(ctx, role: discord.Role):
@@ -2014,8 +1990,6 @@ async def lockrole_command(ctx, role: discord.Role):
     )
     
     await safe_send(ctx, embed=embed)
-
-
 
 @bot.command(name='unlock')
 @is_admin()
@@ -2111,8 +2085,6 @@ async def unlock_command(ctx):
     )
     
     await safe_edit(message, embed=final_embed)
-
-
 
 @bot.command(name='lock')
 @is_admin()
@@ -2242,8 +2214,6 @@ async def lock_command(ctx, lock_type: str = "send"):
     
     await safe_edit(message, embed=final_embed)
 
-
-
 @bot.command(name='currentrole')
 @is_admin()
 async def current_role_command(ctx):
@@ -2293,8 +2263,6 @@ async def current_role_command(ctx):
     
     await safe_send(ctx, embed=embed)
 
-
-# Добавьте команду для сброса установленной роли
 @bot.command(name='resetrole')
 @is_admin()
 async def reset_role_command(ctx):
@@ -2322,7 +2290,6 @@ async def reset_role_command(ctx):
     )
     
     await safe_send(ctx, embed=embed)
-
 
 @bot.command(name='addpoints_multi')
 @is_admin()
@@ -2445,7 +2412,706 @@ async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: s
     
     await safe_edit(message, embed=final_embed)
 
-# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
+# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ РОЛЯМИ ЗА ПОИНТЫ ==========
+
+@bot.command(name='addrole')
+@is_admin()
+async def add_role_for_points(ctx, points: int, *, role_name: str):
+    """Добавить новую роль за поинты"""
+    guild_id = ctx.guild.id
+    
+    # Получаем настройки для этого сервера
+    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    # Проверяем, что количество поинтов положительное
+    if points <= 0:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Количество поинтов должно быть положительным числом!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Проверяем, не существует ли уже такая роль
+    if role_name in role_settings.values():
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль **{role_name}** уже существует в системе!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Проверяем, не заняты ли уже такие поинты
+    if points in role_settings:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"За {points} поинтов уже есть роль **{role_settings[points]}**!\n"
+                       f"Используйте `{PREFIX}removerole {points}` чтобы удалить её сначала.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Добавляем роль в настройки для этого сервера
+    role_settings[points] = role_name
+    role_colors[role_name] = discord.Color.random()
+    
+    # Обновляем глобальные словари
+    GUILD_ROLE_SETTINGS[guild_id] = role_settings
+    GUILD_ROLE_COLORS[guild_id] = role_colors
+    
+    # СОХРАНЯЕМ В БАЗУ ДАННЫХ
+    try:
+        await db.save_role_settings(guild_id, role_settings, role_colors)
+        logger.info(f"✅ Настройки ролей сохранены в БД для сервера {guild_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
+        embed = discord.Embed(
+            title="⚠️ Предупреждение",
+            description="Роль добавлена, но не сохранилась в базу данных!",
+            color=COLORS['warning']
+        )
+        await safe_send(ctx, embed=embed)
+    
+    # Создаем embed с подтверждением
+    embed = discord.Embed(
+        title="✅ Роль добавлена",
+        description=f"Новая роль за поинты успешно добавлена!",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(name="🎭 Название роли", value=f"**{role_name}**", inline=True)
+    embed.add_field(name="💰 Требуемые поинты", value=f"**{points}**", inline=True)
+    embed.add_field(name="🎨 Цвет", value=f"`{role_colors[role_name]}`", inline=True)
+    
+    # Показываем текущую систему ролей для этого сервера
+    roles_text = []
+    for p, name in sorted(role_settings.items()):
+        roles_text.append(f"• **{name}** - {p} поинтов")
+    
+    embed.add_field(
+        name="📊 Текущая система ролей",
+        value="\n".join(roles_text),
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+    
+    # Обновляем роли для всех участников
+    await update_all_member_roles(ctx.guild)
+
+@bot.command(name='removerole')
+@is_admin()
+async def remove_role_for_points(ctx, points: int):
+    """Удалить роль за поинты по количеству поинтов"""
+    guild_id = ctx.guild.id
+    
+    # Получаем настройки для этого сервера
+    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    # Проверяем, существует ли роль с такими поинтами
+    if points not in role_settings:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль за {points} поинтов не найдена!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    role_name = role_settings[points]
+    
+    # Запрашиваем подтверждение
+    embed = discord.Embed(
+        title="⚠️ Подтверждение удаления",
+        description=f"Вы уверены, что хотите удалить роль **{role_name}** за {points} поинтов?",
+        color=COLORS['warning']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        # Удаляем роль из настроек для этого сервера
+        del role_settings[points]
+        if role_name in role_colors:
+            del role_colors[role_name]
+        
+        # Обновляем глобальные словари
+        GUILD_ROLE_SETTINGS[guild_id] = role_settings
+        GUILD_ROLE_COLORS[guild_id] = role_colors
+        
+        # СОХРАНЯЕМ В БАЗУ ДАННЫХ
+        try:
+            await db.save_role_settings(guild_id, role_settings, role_colors)
+            logger.info(f"✅ Настройки ролей обновлены в БД для сервера {guild_id}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
+        
+        # Удаляем саму роль на сервере
+        discord_role = discord.utils.get(ctx.guild.roles, name=role_name)
+        if discord_role:
+            try:
+                await discord_role.delete(reason="Роль удалена из системы поинтов")
+            except Exception as e:
+                logger.error(f"❌ Ошибка удаления роли с сервера: {e}")
+        
+        confirm_embed = discord.Embed(
+            title="✅ Роль удалена",
+            description=f"Роль **{role_name}** за {points} поинтов успешно удалена из системы.",
+            color=COLORS['success']
+        )
+        
+        # Показываем обновленную систему для этого сервера
+        if role_settings:
+            roles_text = []
+            for p, name in sorted(role_settings.items()):
+                roles_text.append(f"• **{name}** - {p} поинтов")
+            confirm_embed.add_field(
+                name="📊 Обновленная система ролей",
+                value="\n".join(roles_text),
+                inline=False
+            )
+        else:
+            confirm_embed.add_field(
+                name="📊 Обновленная система ролей",
+                value="Система ролей пуста",
+                inline=False
+            )
+        
+        await interaction.response.edit_message(embed=confirm_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Удаление отменено",
+            description="Роль не была удалена.",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='removerolebyname')
+@is_admin()
+async def remove_role_by_name(ctx, *, role_name: str):
+    """Удалить роль за поинты по названию"""
+    guild_id = ctx.guild.id
+    role_settings, _ = get_guild_settings(guild_id)
+    
+    # Ищем роль по названию
+    points_to_remove = None
+    for points, name in role_settings.items():
+        if name.lower() == role_name.lower():
+            points_to_remove = points
+            break
+    
+    if points_to_remove is None:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль **{role_name}** не найдена в системе!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Вызываем команду удаления по поинтам
+    ctx.command = bot.get_command('removerole')
+    await ctx.invoke(bot.get_command('removerole'), points=points_to_remove)
+
+@bot.command(name='editrole')
+@is_admin()
+async def edit_role_for_points(ctx, old_points: int, new_points: int = None, *, new_name: str = None):
+    """Изменить роль за поинты (количество поинтов или название)"""
+    guild_id = ctx.guild.id
+    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    # Проверяем, существует ли исходная роль
+    if old_points not in role_settings:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль за {old_points} поинтов не найдена!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    old_name = role_settings[old_points]
+    
+    # Если указаны новые поинты
+    if new_points is not None:
+        if new_points <= 0:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description="Количество поинтов должно быть положительным числом!",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            return
+        
+        if new_points != old_points and new_points in role_settings:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"За {new_points} поинтов уже есть роль **{role_settings[new_points]}**!",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            return
+    
+    # Если указано новое название
+    if new_name is not None:
+        if new_name in role_settings.values() and new_name != old_name:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"Роль **{new_name}** уже существует в системе!",
+                color=COLORS['error']
+            )
+            await safe_send(ctx, embed=embed)
+            return
+    
+    # Сохраняем цвет для новой роли
+    color = role_colors.get(old_name, discord.Color.default())
+    
+    # Обновляем настройки
+    if new_points is not None and new_name is not None:
+        # Меняем и поинты, и название
+        del role_settings[old_points]
+        role_settings[new_points] = new_name
+        if old_name in role_colors:
+            del role_colors[old_name]
+        role_colors[new_name] = color
+        
+        embed = discord.Embed(
+            title="✅ Роль обновлена",
+            description=f"Роль успешно изменена!",
+            color=COLORS['success']
+        )
+        embed.add_field(name="🔄 Было", value=f"**{old_name}** - {old_points} поинтов", inline=False)
+        embed.add_field(name="✨ Стало", value=f"**{new_name}** - {new_points} поинтов", inline=False)
+        
+    elif new_points is not None:
+        # Меняем только поинты
+        del role_settings[old_points]
+        role_settings[new_points] = old_name
+        
+        embed = discord.Embed(
+            title="✅ Роль обновлена",
+            description=f"Количество поинтов для роли **{old_name}** изменено!",
+            color=COLORS['success']
+        )
+        embed.add_field(name="🔄 Было", value=f"{old_points} поинтов", inline=True)
+        embed.add_field(name="✨ Стало", value=f"{new_points} поинтов", inline=True)
+        
+    elif new_name is not None:
+        # Меняем только название
+        role_settings[old_points] = new_name
+        if old_name in role_colors:
+            del role_colors[old_name]
+        role_colors[new_name] = color
+        
+        embed = discord.Embed(
+            title="✅ Роль обновлена",
+            description=f"Название роли изменено!",
+            color=COLORS['success']
+        )
+        embed.add_field(name="🔄 Было", value=f"**{old_name}**", inline=True)
+        embed.add_field(name="✨ Стало", value=f"**{new_name}**", inline=True)
+        embed.add_field(name="💰 Поинты", value=f"{old_points}", inline=True)
+    
+    else:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Укажите новые поинты или новое название!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Обновляем глобальные словари
+    GUILD_ROLE_SETTINGS[guild_id] = role_settings
+    GUILD_ROLE_COLORS[guild_id] = role_colors
+    
+    # СОХРАНЯЕМ В БАЗУ ДАННЫХ
+    try:
+        await db.save_role_settings(guild_id, role_settings, role_colors)
+        logger.info(f"✅ Настройки ролей обновлены в БД для сервера {guild_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
+    
+    # Показываем обновленную систему
+    roles_text = []
+    for p, name in sorted(role_settings.items()):
+        roles_text.append(f"• **{name}** - {p} поинтов")
+    
+    embed.add_field(
+        name="📊 Обновленная система ролей",
+        value="\n".join(roles_text),
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+    
+    # Обновляем роли для всех участников
+    await update_all_member_roles(ctx.guild)
+
+@bot.command(name='setrolecolor')
+@is_admin()
+async def set_role_color(ctx, points: int, color: str):
+    """Установить цвет для роли (HEX код или название цвета)"""
+    guild_id = ctx.guild.id
+    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    # Проверяем, существует ли роль
+    if points not in role_settings:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Роль за {points} поинтов не найдена!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    role_name = role_settings[points]
+    
+    # Парсим цвет
+    try:
+        # Проверяем, является ли это HEX кодом
+        if color.startswith('#'):
+            color = color[1:]
+        
+        # Пробуем создать цвет
+        if color.lower() in ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'gold', 'pink', 'brown', 'black', 'white']:
+            # Предопределенные цвета
+            color_map = {
+                'red': discord.Color.red(),
+                'blue': discord.Color.blue(),
+                'green': discord.Color.green(),
+                'yellow': discord.Color.gold(),
+                'purple': discord.Color.purple(),
+                'orange': discord.Color.orange(),
+                'gold': discord.Color.gold(),
+                'pink': discord.Color.magenta(),
+                'brown': discord.Color.dark_orange(),
+                'black': discord.Color.dark_grey(),
+                'white': discord.Color.lighter_grey()
+            }
+            new_color = color_map.get(color.lower(), discord.Color.default())
+        else:
+            # Пробуем как HEX
+            new_color = discord.Color(int(color, 16))
+    except:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Неверный формат цвета. Используйте HEX код (например, #FF0000) или название цвета (red, blue, green и т.д.)",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Сохраняем цвет
+    role_colors[role_name] = new_color
+    GUILD_ROLE_COLORS[guild_id] = role_colors
+    
+    # СОХРАНЯЕМ В БАЗУ ДАННЫХ
+    try:
+        await db.save_role_settings(guild_id, role_settings, role_colors)
+        logger.info(f"✅ Настройки ролей обновлены в БД для сервера {guild_id}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
+    
+    # Обновляем цвет роли на сервере
+    discord_role = discord.utils.get(ctx.guild.roles, name=role_name)
+    if discord_role:
+        try:
+            await discord_role.edit(color=new_color, reason="Изменение цвета роли")
+        except:
+            pass
+    
+    embed = discord.Embed(
+        title="✅ Цвет роли изменен",
+        description=f"Для роли **{role_name}** установлен новый цвет!",
+        color=new_color
+    )
+    
+    embed.add_field(name="🎭 Роль", value=f"**{role_name}**", inline=True)
+    embed.add_field(name="💰 Поинты", value=f"{points}", inline=True)
+    embed.add_field(name="🎨 Цвет", value=f"`{new_color}`", inline=True)
+    
+    # Показываем пример цвета
+    embed.add_field(name="👁️ Пример", value="████████", inline=False)
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='reorderroles')
+@is_admin()
+async def reorder_roles(ctx):
+    """Перенумеровать роли (пересоздать с правильной иерархией)"""
+    guild_id = ctx.guild.id
+    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    if not role_settings:
+        embed = discord.Embed(
+            title="ℹ️ Нет ролей",
+            description="На сервере нет настроенных ролей за поинты.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="⚠️ Реконструкция ролей",
+        description="Это действие пересоздаст все роли за поинты в правильном порядке иерархии.",
+        color=COLORS['warning']
+    )
+    
+    embed.add_field(
+        name="Что будет сделано:",
+        value="• Все существующие роли за поинты будут удалены\n"
+              "• Роли будут созданы заново в правильном порядке\n"
+              "• Цвета ролей будут сохранены\n"
+              "• Все участники получат свои роли обратно",
+        inline=False
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        await interaction.response.defer()
+        
+        status_embed = discord.Embed(
+            title="⏳ Реконструкция ролей...",
+            description="Начинаю пересоздание ролей...",
+            color=COLORS['info']
+        )
+        status_msg = await interaction.followup.send(embed=status_embed)
+        
+        # Собираем информацию о текущих ролях участников
+        member_roles = {}
+        for member in ctx.guild.members:
+            for role_name in role_settings.values():
+                role = discord.utils.get(ctx.guild.roles, name=role_name)
+                if role and role in member.roles:
+                    if member.id not in member_roles:
+                        member_roles[member.id] = []
+                    member_roles[member.id].append(role_name)
+        
+        # Удаляем все существующие роли за поинты
+        deleted_count = 0
+        for role_name in role_settings.values():
+            role = discord.utils.get(ctx.guild.roles, name=role_name)
+            if role:
+                try:
+                    await role.delete(reason="Реконструкция системы ролей")
+                    deleted_count += 1
+                except:
+                    pass
+        
+        # Создаем роли заново в правильном порядке (от меньших поинтов к большим)
+        created_roles = {}
+        for points, role_name in sorted(role_settings.items()):
+            color = role_colors.get(role_name, discord.Color.default())
+            # Если цвет сохранен как строка, преобразуем обратно
+            if isinstance(color, str):
+                try:
+                    if color.startswith('#'):
+                        color_int = int(color[1:], 16)
+                        color = discord.Color(color_int)
+                    else:
+                        color = discord.Color.default()
+                except:
+                    color = discord.Color.default()
+            
+            try:
+                new_role = await ctx.guild.create_role(
+                    name=role_name,
+                    color=color,
+                    mentionable=True,
+                    reason="Реконструкция системы ролей"
+                )
+                created_roles[role_name] = new_role
+            except Exception as e:
+                logger.error(f"Ошибка создания роли {role_name}: {e}")
+        
+        # Выдаем роли участникам
+        assigned_count = 0
+        for member in ctx.guild.members:
+            if member.id in member_roles:
+                roles_to_add = []
+                for role_name in member_roles[member.id]:
+                    if role_name in created_roles:
+                        roles_to_add.append(created_roles[role_name])
+                
+                if roles_to_add:
+                    try:
+                        await member.add_roles(*roles_to_add, reason="Восстановление ролей после реконструкции")
+                        assigned_count += 1
+                    except:
+                        pass
+        
+        # Упорядочиваем роли (опционально, если бот имеет права)
+        try:
+            # Получаем все роли
+            all_roles = ctx.guild.roles
+            # Сортируем роли по поинтам (высшие поинты - выше в иерархии)
+            role_order = []
+            for points, role_name in sorted(role_settings.items(), reverse=True):
+                if role_name in created_roles:
+                    role_order.append(created_roles[role_name])
+            
+            # Добавляем остальные роли в конец
+            other_roles = [r for r in all_roles if r.name not in role_settings.values() and not r.managed and r != ctx.guild.default_role]
+            role_order.extend(other_roles)
+            
+            # Применяем новый порядок (если есть права)
+            if ctx.guild.me.guild_permissions.manage_roles:
+                await ctx.guild.edit_role_positions(positions={role: i for i, role in enumerate(role_order)})
+        except:
+            pass
+        
+        final_embed = discord.Embed(
+            title="✅ Реконструкция завершена",
+            description="Система ролей успешно пересоздана!",
+            color=COLORS['success']
+        )
+        
+        final_embed.add_field(
+            name="📊 Статистика",
+            value=f"• Удалено ролей: {deleted_count}\n"
+                  f"• Создано ролей: {len(created_roles)}\n"
+                  f"• Восстановлено ролей у участников: {assigned_count}",
+            inline=False
+        )
+        
+        await status_msg.edit(embed=final_embed)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Реконструкция отменена",
+            description="Система ролей не была изменена.",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='saveroles')
+@is_admin()
+async def save_roles_config(ctx):
+    """Сохранить текущую конфигурацию ролей в файл"""
+    guild_id = ctx.guild.id
+    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    # Создаем текстовый файл с конфигурацией
+    filename = f"roles_config_{ctx.guild.id}_{int(datetime.now().timestamp())}.txt"
+    
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write("=== КОНФИГУРАЦИЯ РОЛЕЙ ЗА ПОИНТЫ ===\n\n")
+        f.write(f"Сервер: {ctx.guild.name} (ID: {ctx.guild.id})\n")
+        f.write(f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Экспортировал: {ctx.author.display_name} (ID: {ctx.author.id})\n\n")
+        
+        f.write("=== РОЛИ ===\n")
+        for points, role_name in sorted(role_settings.items()):
+            color = role_colors.get(role_name, discord.Color.default())
+            f.write(f"{points}: {role_name} (цвет: {color})\n")
+        
+        f.write("\n=== КОМАНДЫ ДЛЯ ВОССТАНОВЛЕНИЯ ===\n")
+        for points, role_name in sorted(role_settings.items()):
+            color = role_colors.get(role_name, discord.Color.default())
+            f.write(f"!addrole {points} {role_name}\n")
+            if color != discord.Color.default():
+                f.write(f"!setrolecolor {points} {str(color)}\n")
+    
+    # Отправляем файл
+    file = discord.File(filename)
+    embed = discord.Embed(
+        title="✅ Конфигурация ролей сохранена",
+        description="Текущая конфигурация ролей экспортирована в файл.",
+        color=COLORS['success']
+    )
+    
+    await safe_send(ctx, embed=embed, file=file)
+    
+    # Удаляем временный файл
+    os.remove(filename)
+
+# Вспомогательная функция для обновления ролей всех участников
+async def update_all_member_roles(guild):
+    """Обновить роли для всех участников сервера"""
+    try:
+        logger.info(f"Начинаю массовое обновление ролей на сервере {guild.name}")
+        
+        for member in guild.members:
+            try:
+                await check_and_assign_roles(member)
+                await asyncio.sleep(0.5)  # Небольшая задержка чтобы не забанили за спам API
+            except Exception as e:
+                logger.error(f"Ошибка обновления ролей для {member.display_name}: {e}")
+        
+        logger.info(f"Массовое обновление ролей завершено на сервере {guild.name}")
+    except Exception as e:
+        logger.error(f"Ошибка массового обновления ролей: {e}")
+
+@bot.command(name='updateroles')
+@is_admin()
+async def update_all_roles(ctx):
+    """Обновить роли для всех участников сервера"""
+    
+    embed = discord.Embed(
+        title="⏳ Обновление ролей",
+        description=f"Начинаю обновление ролей для {len(ctx.guild.members)} участников...",
+        color=COLORS['info']
+    )
+    
+    message = await safe_send(ctx, embed=embed)
+    
+    # Запускаем обновление
+    await update_all_member_roles(ctx.guild)
+    
+    final_embed = discord.Embed(
+        title="✅ Обновление завершено",
+        description=f"Роли всех участников сервера обновлены в соответствии с их поинтами.",
+        color=COLORS['success']
+    )
+    
+    if message:
+        await safe_edit(message, embed=final_embed)
+    else:
+        await safe_send(ctx, embed=final_embed)
 
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
 
@@ -2660,8 +3326,6 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
             description=f"❌ В этой категории пока нет кланов.\nДобавьте с помощью `!addclan {clan_type} \"название\"`",
             color=COLORS['info']
         )
-        # Добавляем гифку в начало
-        embed.set_image(url="https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&")
         await safe_send(ctx, embed=embed)
         return
     
@@ -2669,8 +3333,6 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
         title=title,
         color=COLORS['info']
     )
-    # Добавляем гифку в начало
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&")
     
     for clan in clans:
         # Формируем название с тегом
@@ -2700,8 +3362,6 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
     
     await safe_send(ctx, embed=embed)
 
-
-
 @bot.command(name='allclans')
 async def all_clans(ctx):
     """Показать все кланы (союзники, враги, нейтральные)"""
@@ -2722,8 +3382,6 @@ async def all_clans(ctx):
             description="Добавьте кланы с помощью команды `!addclan`",
             color=COLORS['info']
         )
-        # Добавляем гифку в начало
-        embed.set_image(url="https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&")
         await safe_send(ctx, embed=embed)
         return
     
@@ -2732,8 +3390,6 @@ async def all_clans(ctx):
         description=f"Всего кланов: **{len(clans)}**",
         color=COLORS['info']
     )
-    # Добавляем гифку в начало
-    embed.set_image(url="https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&")
     
     # Группируем по типам
     ally_clans_list = [c for c in clans if c['clan_type'] == 'ally']
@@ -2808,8 +3464,6 @@ async def all_clans(ctx):
     embed.set_footer(text="Для добавления кланов используйте !addclan")
     
     await safe_send(ctx, embed=embed)
-
-
 
 @bot.command(name='claninfo')
 async def clan_info(ctx, clan_type: str, *, name: str):
@@ -3072,714 +3726,6 @@ async def search_clan(ctx, *, search_term: str):
     
     await safe_send(ctx, embed=embed)
 
-# Добавьте эти новые команды после существующих команд (например, после команд управления админскими ролями)
-
-# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ РОЛЯМИ ЗА ПОИНТЫ ==========
-
-@bot.command(name='addrole')
-@is_admin()
-async def add_role_for_points(ctx, points: int, *, role_name: str):
-    """Добавить новую роль за поинты"""
-    guild_id = ctx.guild.id
-    
-    # Получаем настройки для этого сервера
-    role_settings, role_colors = get_guild_settings(guild_id)
-    
-    # Проверяем, что количество поинтов положительное
-    if points <= 0:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Количество поинтов должно быть положительным числом!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Проверяем, не существует ли уже такая роль
-    if role_name in role_settings.values():
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Роль **{role_name}** уже существует в системе!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Проверяем, не заняты ли уже такие поинты
-    if points in role_settings:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"За {points} поинтов уже есть роль **{role_settings[points]}**!\n"
-                       f"Используйте `{PREFIX}removerole {points}` чтобы удалить её сначала.",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Добавляем роль в настройки для этого сервера
-    role_settings[points] = role_name
-    role_colors[role_name] = discord.Color.random()
-    
-    # Обновляем глобальные словари
-    GUILD_ROLE_SETTINGS[guild_id] = role_settings
-    GUILD_ROLE_COLORS[guild_id] = role_colors
-    
-    # СОХРАНЯЕМ В БАЗУ ДАННЫХ
-    try:
-        await db.save_role_settings(guild_id, role_settings, role_colors)
-        logger.info(f"✅ Настройки ролей сохранены в БД для сервера {guild_id}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
-        embed = discord.Embed(
-            title="⚠️ Предупреждение",
-            description="Роль добавлена, но не сохранилась в базу данных!",
-            color=COLORS['warning']
-        )
-        await safe_send(ctx, embed=embed)
-    
-    # Создаем embed с подтверждением
-    embed = discord.Embed(
-        title="✅ Роль добавлена",
-        description=f"Новая роль за поинты успешно добавлена!",
-        color=COLORS['success']
-    )
-    
-    embed.add_field(name="🎭 Название роли", value=f"**{role_name}**", inline=True)
-    embed.add_field(name="💰 Требуемые поинты", value=f"**{points}**", inline=True)
-    embed.add_field(name="🎨 Цвет", value=f"`{role_colors[role_name]}`", inline=True)
-    
-    # Показываем текущую систему ролей для этого сервера
-    roles_text = []
-    for p, name in sorted(role_settings.items()):
-        roles_text.append(f"• **{name}** - {p} поинтов")
-    
-    embed.add_field(
-        name="📊 Текущая система ролей",
-        value="\n".join(roles_text),
-        inline=False
-    )
-    
-    await safe_send(ctx, embed=embed)
-    
-    # Обновляем роли для всех участников
-    await update_all_member_roles(ctx.guild)
-
-
-@bot.command(name='removerole')
-@is_admin()
-async def remove_role_for_points(ctx, points: int):
-    """Удалить роль за поинты по количеству поинтов"""
-    guild_id = ctx.guild.id
-    
-    # Получаем настройки для этого сервера
-    role_settings, role_colors = get_guild_settings(guild_id)
-    
-    # Проверяем, существует ли роль с такими поинтами
-    if points not in role_settings:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Роль за {points} поинтов не найдена!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    role_name = role_settings[points]
-    
-    # Запрашиваем подтверждение
-    embed = discord.Embed(
-        title="⚠️ Подтверждение удаления",
-        description=f"Вы уверены, что хотите удалить роль **{role_name}** за {points} поинтов?",
-        color=COLORS['warning']
-    )
-    
-    view = discord.ui.View(timeout=30)
-    
-    async def confirm_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
-            return
-        
-        # Удаляем роль из настроек для этого сервера
-        del role_settings[points]
-        if role_name in role_colors:
-            del role_colors[role_name]
-        
-        # Обновляем глобальные словари
-        GUILD_ROLE_SETTINGS[guild_id] = role_settings
-        GUILD_ROLE_COLORS[guild_id] = role_colors
-        
-        # СОХРАНЯЕМ В БАЗУ ДАННЫХ
-        try:
-            await db.save_role_settings(guild_id, role_settings, role_colors)
-            logger.info(f"✅ Настройки ролей обновлены в БД для сервера {guild_id}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
-        
-        # Удаляем саму роль на сервере
-        discord_role = discord.utils.get(ctx.guild.roles, name=role_name)
-        if discord_role:
-            try:
-                await discord_role.delete(reason="Роль удалена из системы поинтов")
-            except Exception as e:
-                logger.error(f"❌ Ошибка удаления роли с сервера: {e}")
-        
-        confirm_embed = discord.Embed(
-            title="✅ Роль удалена",
-            description=f"Роль **{role_name}** за {points} поинтов успешно удалена из системы.",
-            color=COLORS['success']
-        )
-        
-        # Показываем обновленную систему для этого сервера
-        if role_settings:
-            roles_text = []
-            for p, name in sorted(role_settings.items()):
-                roles_text.append(f"• **{name}** - {p} поинтов")
-            confirm_embed.add_field(
-                name="📊 Обновленная система ролей",
-                value="\n".join(roles_text),
-                inline=False
-            )
-        else:
-            confirm_embed.add_field(
-                name="📊 Обновленная система ролей",
-                value="Система ролей пуста",
-                inline=False
-            )
-        
-        await interaction.response.edit_message(embed=confirm_embed, view=None)
-    
-    async def cancel_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
-            return
-        
-        cancel_embed = discord.Embed(
-            title="❌ Удаление отменено",
-            description="Роль не была удалена.",
-            color=COLORS['warning']
-        )
-        await interaction.response.edit_message(embed=cancel_embed, view=None)
-    
-    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
-    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
-    
-    confirm_button.callback = confirm_callback
-    cancel_button.callback = cancel_callback
-    
-    view.add_item(confirm_button)
-    view.add_item(cancel_button)
-    
-    await safe_send(ctx, embed=embed, view=view)
-
-
-@bot.command(name='removerolebyname')
-@is_admin()
-async def remove_role_by_name(ctx, *, role_name: str):
-    """Удалить роль за поинты по названию"""
-    global ROLE_SETTINGS, ROLE_COLORS
-    
-    # Ищем роль по названию
-    points_to_remove = None
-    for points, name in ROLE_SETTINGS.items():
-        if name.lower() == role_name.lower():
-            points_to_remove = points
-            break
-    
-    if points_to_remove is None:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Роль **{role_name}** не найдена в системе!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Вызываем команду удаления по поинтам
-    ctx.command = bot.get_command('removerole')
-    await ctx.invoke(bot.get_command('removerole'), points=points_to_remove)
-
-@bot.command(name='editrole')
-@is_admin()
-async def edit_role_for_points(ctx, old_points: int, new_points: int = None, *, new_name: str = None):
-    """Изменить роль за поинты (количество поинтов или название)"""
-    global ROLE_SETTINGS, ROLE_COLORS
-    
-    # Проверяем, существует ли исходная роль
-    if old_points not in ROLE_SETTINGS:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Роль за {old_points} поинтов не найдена!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    old_name = ROLE_SETTINGS[old_points]
-    
-    # Если указаны новые поинты
-    if new_points is not None:
-        if new_points <= 0:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description="Количество поинтов должно быть положительным числом!",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            return
-        
-        if new_points != old_points and new_points in ROLE_SETTINGS:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"За {new_points} поинтов уже есть роль **{ROLE_SETTINGS[new_points]}**!",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            return
-    
-    # Если указано новое название
-    if new_name is not None:
-        if new_name in ROLE_SETTINGS.values() and new_name != old_name:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"Роль **{new_name}** уже существует в системе!",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            return
-    
-    # Сохраняем цвет для новой роли
-    color = ROLE_COLORS.get(old_name, discord.Color.default())
-    
-    # Обновляем настройки
-    if new_points is not None and new_name is not None:
-        # Меняем и поинты, и название
-        del ROLE_SETTINGS[old_points]
-        ROLE_SETTINGS[new_points] = new_name
-        if old_name in ROLE_COLORS:
-            del ROLE_COLORS[old_name]
-        ROLE_COLORS[new_name] = color
-        
-        embed = discord.Embed(
-            title="✅ Роль обновлена",
-            description=f"Роль успешно изменена!",
-            color=COLORS['success']
-        )
-        embed.add_field(name="🔄 Было", value=f"**{old_name}** - {old_points} поинтов", inline=False)
-        embed.add_field(name="✨ Стало", value=f"**{new_name}** - {new_points} поинтов", inline=False)
-        
-    elif new_points is not None:
-        # Меняем только поинты
-        del ROLE_SETTINGS[old_points]
-        ROLE_SETTINGS[new_points] = old_name
-        
-        embed = discord.Embed(
-            title="✅ Роль обновлена",
-            description=f"Количество поинтов для роли **{old_name}** изменено!",
-            color=COLORS['success']
-        )
-        embed.add_field(name="🔄 Было", value=f"{old_points} поинтов", inline=True)
-        embed.add_field(name="✨ Стало", value=f"{new_points} поинтов", inline=True)
-        
-    elif new_name is not None:
-        # Меняем только название
-        ROLE_SETTINGS[old_points] = new_name
-        if old_name in ROLE_COLORS:
-            del ROLE_COLORS[old_name]
-        ROLE_COLORS[new_name] = color
-        
-        embed = discord.Embed(
-            title="✅ Роль обновлена",
-            description=f"Название роли изменено!",
-            color=COLORS['success'])
-        embed.add_field(name="🔄 Было", value=f"**{old_name}**", inline=True)
-        embed.add_field(name="✨ Стало", value=f"**{new_name}**", inline=True)
-        embed.add_field(name="💰 Поинты", value=f"{old_points}", inline=True)
-    
-    else:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Укажите новые поинты или новое название!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Показываем обновленную систему
-    roles_text = []
-    for p, name in sorted(ROLE_SETTINGS.items()):
-        roles_text.append(f"• **{name}** - {p} поинтов")
-    
-    embed.add_field(
-        name="📊 Обновленная система ролей",
-        value="\n".join(roles_text),
-        inline=False
-    )
-    
-    await safe_send(ctx, embed=embed)
-    
-    # Обновляем роли для всех участников
-    await update_all_member_roles(ctx.guild)
-
-@bot.command(name='setrolecolor')
-@is_admin()
-async def set_role_color(ctx, points: int, color: str):
-    """Установить цвет для роли (HEX код или название цвета)"""
-    global ROLE_COLORS
-    
-    # Проверяем, существует ли роль
-    if points not in ROLE_SETTINGS:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Роль за {points} поинтов не найдена!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    role_name = ROLE_SETTINGS[points]
-    
-    # Парсим цвет
-    try:
-        # Проверяем, является ли это HEX кодом
-        if color.startswith('#'):
-            color = color[1:]
-        
-        # Пробуем создать цвет
-        if color.lower() in ['red', 'blue', 'green', 'yellow', 'purple', 'orange', 'gold', 'pink', 'brown', 'black', 'white']:
-            # Предопределенные цвета
-            color_map = {
-                'red': discord.Color.red(),
-                'blue': discord.Color.blue(),
-                'green': discord.Color.green(),
-                'yellow': discord.Color.gold(),
-                'purple': discord.Color.purple(),
-                'orange': discord.Color.orange(),
-                'gold': discord.Color.gold(),
-                'pink': discord.Color.magenta(),
-                'brown': discord.Color.dark_orange(),
-                'black': discord.Color.dark_grey(),
-                'white': discord.Color.lighter_grey()
-            }
-            new_color = color_map.get(color.lower(), discord.Color.default())
-        else:
-            # Пробуем как HEX
-            new_color = discord.Color(int(color, 16))
-    except:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Неверный формат цвета. Используйте HEX код (например, #FF0000) или название цвета (red, blue, green и т.д.)",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Сохраняем цвет
-    ROLE_COLORS[role_name] = new_color
-    
-    # Обновляем цвет роли на сервере
-    discord_role = discord.utils.get(ctx.guild.roles, name=role_name)
-    if discord_role:
-        try:
-            await discord_role.edit(color=new_color, reason="Изменение цвета роли")
-        except:
-            pass
-    
-    embed = discord.Embed(
-        title="✅ Цвет роли изменен",
-        description=f"Для роли **{role_name}** установлен новый цвет!",
-        color=new_color
-    )
-    
-    embed.add_field(name="🎭 Роль", value=f"**{role_name}**", inline=True)
-    embed.add_field(name="💰 Поинты", value=f"{points}", inline=True)
-    embed.add_field(name="🎨 Цвет", value=f"`{new_color}`", inline=True)
-    
-    # Показываем пример цвета
-    embed.add_field(name="👁️ Пример", value="████████", inline=False)
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='reorderroles')
-@is_admin()
-async def reorder_roles(ctx):
-    """Перенумеровать роли (пересоздать с правильной иерархией)"""
-    
-    embed = discord.Embed(
-        title="⚠️ Реконструкция ролей",
-        description="Это действие пересоздаст все роли за поинты в правильном порядке иерархии.",
-        color=COLORS['warning']
-    )
-    
-    embed.add_field(
-        name="Что будет сделано:",
-        value="• Все существующие роли за поинты будут удалены\n"
-              "• Роли будут созданы заново в правильном порядке\n"
-              "• Цвета ролей будут сохранены\n"
-              "• Все участники получат свои роли обратно",
-        inline=False
-    )
-    
-    view = discord.ui.View(timeout=30)
-    
-    async def confirm_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
-            return
-        
-        await interaction.response.defer()
-        
-        status_embed = discord.Embed(
-            title="⏳ Реконструкция ролей...",
-            description="Начинаю пересоздание ролей...",
-            color=COLORS['info']
-        )
-        status_msg = await interaction.followup.send(embed=status_embed)
-        
-        # Собираем информацию о текущих ролях участников
-        member_roles = {}
-        for member in ctx.guild.members:
-            for role_name in ROLE_SETTINGS.values():
-                role = discord.utils.get(ctx.guild.roles, name=role_name)
-                if role and role in member.roles:
-                    if member.id not in member_roles:
-                        member_roles[member.id] = []
-                    member_roles[member.id].append(role_name)
-        
-        # Удаляем все существующие роли за поинты
-        deleted_count = 0
-        for role_name in ROLE_SETTINGS.values():
-            role = discord.utils.get(ctx.guild.roles, name=role_name)
-            if role:
-                try:
-                    await role.delete(reason="Реконструкция системы ролей")
-                    deleted_count += 1
-                except:
-                    pass
-        
-        # Создаем роли заново в правильном порядке (от меньших поинтов к большим)
-        created_roles = {}
-        for points, role_name in sorted(ROLE_SETTINGS.items()):
-            color = ROLE_COLORS.get(role_name, discord.Color.default())
-            try:
-                new_role = await ctx.guild.create_role(
-                    name=role_name,
-                    color=color,
-                    mentionable=True,
-                    reason="Реконструкция системы ролей"
-                )
-                created_roles[role_name] = new_role
-            except Exception as e:
-                logger.error(f"Ошибка создания роли {role_name}: {e}")
-        
-        # Выдаем роли участникам
-        assigned_count = 0
-        for member in ctx.guild.members:
-            if member.id in member_roles:
-                roles_to_add = []
-                for role_name in member_roles[member.id]:
-                    if role_name in created_roles:
-                        roles_to_add.append(created_roles[role_name])
-                
-                if roles_to_add:
-                    try:
-                        await member.add_roles(*roles_to_add, reason="Восстановление ролей после реконструкции")
-                        assigned_count += 1
-                    except:
-                        pass
-        
-        # Упорядочиваем роли (опционально, если бот имеет права)
-        try:
-            # Получаем все роли
-            all_roles = ctx.guild.roles
-            # Сортируем роли по поинтам (высшие поинты - выше в иерархии)
-            role_order = []
-            for points, role_name in sorted(ROLE_SETTINGS.items(), reverse=True):
-                if role_name in created_roles:
-                    role_order.append(created_roles[role_name])
-            
-            # Добавляем остальные роли в конец
-            other_roles = [r for r in all_roles if r.name not in ROLE_SETTINGS.values() and not r.managed and r != ctx.guild.default_role]
-            role_order.extend(other_roles)
-            
-            # Применяем новый порядок (если есть права)
-            if ctx.guild.me.guild_permissions.manage_roles:
-                await ctx.guild.edit_role_positions(positions={role: i for i, role in enumerate(role_order)})
-        except:
-            pass
-        
-        final_embed = discord.Embed(
-            title="✅ Реконструкция завершена",
-            description="Система ролей успешно пересоздана!",
-            color=COLORS['success']
-        )
-        
-        final_embed.add_field(
-            name="📊 Статистика",
-            value=f"• Удалено ролей: {deleted_count}\n"
-                  f"• Создано ролей: {len(created_roles)}\n"
-                  f"• Восстановлено ролей у участников: {assigned_count}",
-            inline=False
-        )
-        
-        await status_msg.edit(embed=final_embed)
-    
-    async def cancel_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
-            return
-        
-        cancel_embed = discord.Embed(
-            title="❌ Реконструкция отменена",
-            description="Система ролей не была изменена.",
-            color=COLORS['warning']
-        )
-        await interaction.response.edit_message(embed=cancel_embed, view=None)
-    
-    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
-    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
-    
-    confirm_button.callback = confirm_callback
-    cancel_button.callback = cancel_callback
-    
-    view.add_item(confirm_button)
-    view.add_item(cancel_button)
-    
-    await safe_send(ctx, embed=embed, view=view)
-
-@bot.command(name='saveroles')
-@is_admin()
-async def save_roles_config(ctx):
-    """Сохранить текущую конфигурацию ролей в файл"""
-    
-    # Создаем текстовый файл с конфигурацией
-    filename = f"roles_config_{ctx.guild.id}_{int(datetime.now().timestamp())}.txt"
-    
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write("=== КОНФИГУРАЦИЯ РОЛЕЙ ЗА ПОИНТЫ ===\n\n")
-        f.write(f"Сервер: {ctx.guild.name} (ID: {ctx.guild.id})\n")
-        f.write(f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Экспортировал: {ctx.author.display_name} (ID: {ctx.author.id})\n\n")
-        
-        f.write("=== РОЛИ ===\n")
-        for points, role_name in sorted(ROLE_SETTINGS.items()):
-            color = ROLE_COLORS.get(role_name, discord.Color.default())
-            f.write(f"{points}: {role_name} (цвет: {color})\n")
-        
-        f.write("\n=== КОМАНДЫ ДЛЯ ВОССТАНОВЛЕНИЯ ===\n")
-        for points, role_name in sorted(ROLE_SETTINGS.items()):
-            color = ROLE_COLORS.get(role_name, discord.Color.default())
-            f.write(f"!addrole {points} {role_name}\n")
-            if color != discord.Color.default():
-                f.write(f"!setrolecolor {points} {str(color)}\n")
-    
-    # Отправляем файл
-    file = discord.File(filename)
-    embed = discord.Embed(
-        title="✅ Конфигурация ролей сохранена",
-        description="Текущая конфигурация ролей экспортирована в файл.",
-        color=COLORS['success']
-    )
-    
-    await safe_send(ctx, embed=embed, file=file)
-    
-    # Удаляем временный файл
-    os.remove(filename)
-
-# Вспомогательная функция для обновления ролей всех участников
-async def update_all_member_roles(guild):
-    """Обновить роли для всех участников сервера"""
-    try:
-        logger.info(f"Начинаю массовое обновление ролей на сервере {guild.name}")
-        
-        for member in guild.members:
-            try:
-                await check_and_assign_roles(member)
-                await asyncio.sleep(0.5)  # Небольшая задержка чтобы не забанили за спам API
-            except Exception as e:
-                logger.error(f"Ошибка обновления ролей для {member.display_name}: {e}")
-        
-        logger.info(f"Массовое обновление ролей завершено на сервере {guild.name}")
-    except Exception as e:
-        logger.error(f"Ошибка массового обновления ролей: {e}")
-
-@bot.command(name='updateroles')
-@is_admin()
-async def update_all_roles(ctx):
-    """Обновить роли для всех участников сервера"""
-    
-    embed = discord.Embed(
-        title="⏳ Обновление ролей",
-        description=f"Начинаю обновление ролей для {len(ctx.guild.members)} участников...",
-        color=COLORS['info']
-    )
-    
-    message = await safe_send(ctx, embed=embed)
-    
-    # Запускаем обновление
-    await update_all_member_roles(ctx.guild)
-    
-    final_embed = discord.Embed(
-        title="✅ Обновление завершено",
-        description=f"Роли всех участников сервера обновлены в соответствии с их поинтами.",
-        color=COLORS['success']
-    )
-    
-    if message:
-        await safe_edit(message, embed=final_embed)
-    else:
-        await safe_send(ctx, embed=final_embed)
-
-# Добавьте эти новые команды после существующих команд (например, после команды clearclans)
-
-
-@bot.command(name='reloadroles')
-@is_admin()
-async def reload_roles_from_db(ctx):
-    """Перезагрузить настройки ролей из базы данных"""
-    global ROLE_SETTINGS, ROLE_COLORS
-    
-    try:
-        loaded_settings, loaded_colors = await db.load_role_settings(ctx.guild.id)
-        
-        if loaded_settings:
-            ROLE_SETTINGS = loaded_settings
-            ROLE_COLORS = loaded_colors
-            
-            embed = discord.Embed(
-                title="✅ Роли перезагружены",
-                description=f"Загружено **{len(loaded_settings)}** ролей из базы данных",
-                color=COLORS['success']
-            )
-            
-            # Показываем загруженные роли
-            roles_text = []
-            for p, name in sorted(ROLE_SETTINGS.items()):
-                roles_text.append(f"• **{name}** - {p} поинтов")
-            
-            embed.add_field(
-                name="📊 Загруженные роли",
-                value="\n".join(roles_text) if roles_text else "Нет ролей",
-                inline=False
-            )
-        else:
-            embed = discord.Embed(
-                title="ℹ️ Нет сохраненных ролей",
-                description="В базе данных нет сохраненных настроек ролей для этого сервера",
-                color=COLORS['info']
-            )
-        
-        await safe_send(ctx, embed=embed)
-        
-    except Exception as e:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Не удалось загрузить роли из БД: {str(e)[:100]}",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-
-
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ АДМИНСКИМИ РОЛЯМИ ==========
 
 @bot.command(name='addadminrole')
@@ -4034,7 +3980,70 @@ async def clear_admin_roles(ctx):
     
     await safe_send(ctx, embed=embed, view=view)
 
-# Не забудьте также обновить команду help, добавив информацию о новых командах
+# ========== КОМАНДА RELOADROLES ==========
+
+@bot.command(name='reloadroles')
+@is_admin()
+async def reload_roles_from_db(ctx):
+    """Перезагрузить настройки ролей из базы данных"""
+    global GUILD_ROLE_SETTINGS, GUILD_ROLE_COLORS
+    guild_id = ctx.guild.id
+    
+    try:
+        loaded_settings, loaded_colors = await db.load_role_settings(guild_id)
+        
+        if loaded_settings:
+            GUILD_ROLE_SETTINGS[guild_id] = loaded_settings
+            # Преобразуем строки цветов обратно в discord.Color
+            colors = {}
+            for role_name, color_str in loaded_colors.items():
+                try:
+                    if color_str and color_str.startswith('#'):
+                        color_int = int(color_str[1:], 16)
+                        colors[role_name] = discord.Color(color_int)
+                    else:
+                        colors[role_name] = discord.Color.default()
+                except:
+                    colors[role_name] = discord.Color.default()
+            GUILD_ROLE_COLORS[guild_id] = colors
+            
+            embed = discord.Embed(
+                title="✅ Роли перезагружены",
+                description=f"Загружено **{len(loaded_settings)}** ролей из базы данных",
+                color=COLORS['success']
+            )
+            
+            # Показываем загруженные роли
+            roles_text = []
+            for p, name in sorted(GUILD_ROLE_SETTINGS[guild_id].items()):
+                roles_text.append(f"• **{name}** - {p} поинтов")
+            
+            embed.add_field(
+                name="📊 Загруженные роли",
+                value="\n".join(roles_text) if roles_text else "Нет ролей",
+                inline=False
+            )
+        else:
+            # Если нет сохраненных, используем стандартные
+            GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+            GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+            
+            embed = discord.Embed(
+                title="ℹ️ Нет сохраненных ролей",
+                description="В базе данных нет сохраненных настроек ролей. Используются стандартные настройки.",
+                color=COLORS['info']
+            )
+        
+        await safe_send(ctx, embed=embed)
+        
+    except Exception as e:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Не удалось загрузить роли из БД: {str(e)[:100]}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+
 # ========== КОМАНДА HELP ==========
 
 @bot.command(name='help')
@@ -4102,7 +4111,8 @@ async def help_command(ctx):
                   f"```{PREFIX}setrolecolor 200 red``` - Или по названию цвета\n"
                   f"```{PREFIX}reorderroles``` - Пересоздать все роли в правильном порядке\n"
                   f"```{PREFIX}updateroles``` - Обновить роли для ВСЕХ участников сервера\n"
-                  f"```{PREFIX}saveroles``` - Сохранить конфигурацию ролей в файл",
+                  f"```{PREFIX}saveroles``` - Сохранить конфигурацию ролей в файл\n"
+                  f"```{PREFIX}reloadroles``` - Перезагрузить роли из базы данных",
             inline=False
         )
         
@@ -4132,8 +4142,11 @@ async def help_command(ctx):
         # ========== БЫСТРЫЕ КОМАНДЫ ДЛЯ КОНКРЕТНОЙ РОЛИ ==========
         embed.add_field(
             name="⚡ **Быстрые команды для блокировочной роли**",
-            value=f"```{PREFIX}lock [тип]``` - Быстрая блокировка каналов для роли\n"
+            value=f"```{PREFIX}lockrole @роль``` - Установить роль для быстрых команд\n"
+                  f"```{PREFIX}lock [тип]``` - Быстрая блокировка каналов для роли\n"
                   f"```{PREFIX}unlock``` - Быстрая разблокировка каналов для роли\n"
+                  f"```{PREFIX}currentrole``` - Показать текущую роль\n"
+                  f"```{PREFIX}resetrole``` - Сбросить установленную роль\n"
                   f"**Типы блокировки:** `send` (только писать), `view` (скрыть), `both` (полная)",
             inline=False
         )
@@ -4203,10 +4216,11 @@ async def help_command(ctx):
     else:
         admin_roles_text = ["• Не настроены (только администраторы Discord)"]
     
-    # Информация о ролях за поинты
-    roles_count = len(ROLE_SETTINGS)
+    # Информация о ролях за поинты для этого сервера
+    role_settings, _ = get_guild_settings(ctx.guild.id)
+    roles_count = len(role_settings)
     if roles_count > 0:
-        roles_range = f"от {min(ROLE_SETTINGS.keys())} до {max(ROLE_SETTINGS.keys())} поинтов"
+        roles_range = f"от {min(role_settings.keys())} до {max(role_settings.keys())} поинтов"
     else:
         roles_range = "не настроены"
     
@@ -4235,7 +4249,7 @@ async def help_command(ctx):
     embed.add_field(
         name="🔗 **Полезные ссылки**",
         value="• [Поддержка](https://t.me/Agentgnd)\n"
-              f"• Версия бота: v1.3",
+              f"• Версия бота: v1.4",
         inline=False
     )
 
