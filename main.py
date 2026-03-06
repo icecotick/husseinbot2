@@ -4044,6 +4044,20 @@ async def reload_roles_from_db(ctx):
         )
         await safe_send(ctx, embed=embed)
 
+
+# ========== СИСТЕМА ВОУЧЕЙ (ГОЛОСОВАНИЯ) ==========
+
+class VouchView(discord.ui.View):
+    """Класс для отображения кнопок голосования"""
+    
+    def __init__(self, target_user: discord.Member, target_role: discord.Role, initiator: discord.Member):
+        super().__init__(timeout=3600)  # 1 час на голосование
+        self.target_user = target_user
+        self.target_role = target_role
+        self.initiator = initiator
+        self.votes_for = set() 
+
+
 # ========== КОМАНДА HELP ==========
 
 @bot.command(name='help')
