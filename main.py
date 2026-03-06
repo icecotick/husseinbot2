@@ -1636,8 +1636,11 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     if member is None:
         member = ctx.author
     
-    user_id = member.id
     guild_id = ctx.guild.id
+    user_id = member.id
+    
+    # Получаем настройки ролей для этого сервера
+    role_settings, _ = get_guild_settings(guild_id)
     
     # Получаем данные из базы
     points = await db.get_user_points(user_id, guild_id)
@@ -1653,12 +1656,11 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     embed.add_field(name="Баланс", value=f"**{points}** поинтов", inline=True)
     embed.add_field(name="Позиция в рейтинге", value=f"**#{position}**", inline=True)
     
-    # Система ролей - теперь используем ТОЛЬКО текущие роли из ROLE_SETTINGS
+    # Система ролей для этого сервера
     roles_text = []
-    # Сортируем роли по количеству поинтов
-    sorted_roles = sorted(ROLE_SETTINGS.items())
+    sorted_roles = sorted(role_settings.items())
     
-    if sorted_roles:  # Проверяем, есть ли вообще роли
+    if sorted_roles:
         for required_points, role_name in sorted_roles:
             status = "✅" if points >= required_points else "⏳"
             roles_text.append(f"{status} **{role_name}** - {required_points} поинтов")
@@ -1691,7 +1693,6 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
                 inline=False
             )
     else:
-        # Если ролей нет, показываем сообщение
         embed.add_field(
             name="🏅 Система ролей",
             value="⚙️ Система ролей еще не настроена администратором",
