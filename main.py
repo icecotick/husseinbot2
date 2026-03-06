@@ -734,12 +734,18 @@ async def check_and_assign_roles(member: discord.Member):
         guild_id = member.guild.id
         user_id = member.id
         
+        # Получаем настройки ролей для этого сервера
+        role_settings, role_colors = get_guild_settings(guild_id)
+        
+        if not role_settings:
+            return  # Нет настроек ролей для этого сервера
+        
         # Получаем поинты пользователя
         points = await db.get_user_points(user_id, guild_id)
         
         # Находим соответствующую роль
         target_role_name = None
-        for required_points, role_name in sorted(ROLE_SETTINGS.items()):
+        for required_points, role_name in sorted(role_settings.items()):
             if points >= required_points:
                 target_role_name = role_name
         
@@ -752,7 +758,7 @@ async def check_and_assign_roles(member: discord.Member):
             return  # Уже есть эта роль
         
         # Удаляем старые роли за поинты
-        for role_name in ROLE_SETTINGS.values():
+        for role_name in role_settings.values():
             if role_name != target_role_name:
                 old_role = discord.utils.get(member.guild.roles, name=role_name)
                 if old_role and old_role in member.roles:
@@ -764,14 +770,25 @@ async def check_and_assign_roles(member: discord.Member):
         # Находим или создаем новую роль
         if not discord_role:
             try:
-                color = ROLE_COLORS.get(target_role_name, discord.Color.default())
+                color = role_colors.get(target_role_name, discord.Color.default())
+                # Если цвет сохранен как строка, преобразуем обратно
+                if isinstance(color, str):
+                    try:
+                        if color.startswith('#'):
+                            color_int = int(color[1:], 16)
+                            color = discord.Color(color_int)
+                        else:
+                            color = discord.Color.default()
+                    except:
+                        color = discord.Color.default()
+                
                 discord_role = await member.guild.create_role(
                     name=target_role_name,
                     color=color,
                     mentionable=True,
                     reason="Автоматическое создание роли за поинты"
                 )
-                logger.info(f"Создана новая роль: {target_role_name}")
+                logger.info(f"Создана новая роль: {target_role_name} на сервере {member.guild.name}")
             except discord.Forbidden:
                 logger.error(f'Недостаточно прав для создания роли {target_role_name}')
                 return
@@ -795,6 +812,7 @@ async def check_and_assign_roles(member: discord.Member):
             
     except Exception as e:
         logger.error(f'Ошибка в check_and_assign_roles: {e}')
+
 
 async def send_role_notification(member: discord.Member, role_name: str, points: int):
     """Отправка уведомления о получении новой роли"""
