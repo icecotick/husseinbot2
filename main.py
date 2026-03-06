@@ -168,7 +168,19 @@ class Database:
             ''')
 
             logger.info("✅ Таблицы пользователей и каналов инициализированы")
-    
+
+
+
+    def get_guild_settings(guild_id: int):
+    """Получить настройки ролей для конкретного сервера"""
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        # Если для сервера нет настроек, создаем копию стандартных
+        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    return GUILD_ROLE_SETTINGS[guild_id], GUILD_ROLE_COLORS[guild_id]
+
+
+
     async def get_user_points(self, user_id: int, guild_id: int) -> int:
         """Получить количество поинтов пользователя"""
         async with self.pool.acquire() as conn:
@@ -398,65 +410,61 @@ class Database:
      # Добавьте эти методы в класс Database (после существующих методов)
 
     async def save_role_settings(self, guild_id: int, role_settings: dict, role_colors: dict):
-        """Сохранить настройки ролей для сервера"""
-        async with self.pool.acquire() as conn:
-            # Создаем таблицу если её нет
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS role_settings (
-                    guild_id BIGINT,
-                    points INTEGER,
-                    role_name TEXT,
-                    role_color TEXT,
-                    PRIMARY KEY (guild_id, points)
-                )
-            ''')
+    """Сохранить настройки ролей для конкретного сервера"""
+    async with self.pool.acquire() as conn:
+        # Создаем таблицу если её нет
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS role_settings (
+                guild_id BIGINT,
+                points INTEGER,
+                role_name TEXT,
+                role_color TEXT,
+                PRIMARY KEY (guild_id, points)
+            )
+        ''')
         
-        # Сначала удаляем старые настройки
-            await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
+        # Сначала удаляем старые настройки для этого сервера
+        await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
         
         # Сохраняем новые
-            for points, role_name in role_settings.items():
-                color = str(role_colors.get(role_name, discord.Color.default()))
-                await conn.execute(
-                    'INSERT INTO role_settings (guild_id, points, role_name, role_color) VALUES ($1, $2, $3, $4)',
-                    guild_id, points, role_name, color
-                )
-            logger.info(f"✅ Настройки ролей сохранены для сервера {guild_id}")
-
-    async def load_role_settings(self, guild_id: int):
-        """Загрузить настройки ролей для сервера"""
-        async with self.pool.acquire() as conn:
-            # Создаем таблицу если её нет
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS role_settings (
-                    guild_id BIGINT,
-                    points INTEGER,
-                    role_name TEXT,
-                    role_color TEXT,
-                    PRIMARY KEY (guild_id, points)
-                )
-            ''')
-        
-            rows = await conn.fetch(
-                'SELECT points, role_name, role_color FROM role_settings WHERE guild_id = $1 ORDER BY points',
-                guild_id
+        for points, role_name in role_settings.items():
+            color = str(role_colors.get(role_name, discord.Color.default()))
+            await conn.execute(
+                'INSERT INTO role_settings (guild_id, points, role_name, role_color) VALUES ($1, $2, $3, $4)',
+                guild_id, points, role_name, color
             )
-        
-            role_settings = {}
-            role_colors = {}
-        
-            for row in rows:
-                role_settings[row['points']] = row['role_name']
-                # Парсим цвет обратно в discord.Color
-                try:
-                    # Просто сохраняем название цвета, потом установим при создании роли
-                    role_colors[row['role_name']] = row['role_color']
-                except:
-                    role_colors[row['role_name']] = str(discord.Color.default())
-            
-            return role_settings, role_colors
+        logger.info(f"✅ Настройки ролей сохранены для сервера {guild_id}")
 
 
+    
+    async def load_role_settings(self, guild_id: int):
+    """Загрузить настройки ролей для конкретного сервера"""
+    async with self.pool.acquire() as conn:
+        # Создаем таблицу если её нет
+        await conn.execute('''
+            CREATE TABLE IF NOT EXISTS role_settings (
+                guild_id BIGINT,
+                points INTEGER,
+                role_name TEXT,
+                role_color TEXT,
+                PRIMARY KEY (guild_id, points)
+            )
+        ''')
+        
+        rows = await conn.fetch(
+            'SELECT points, role_name, role_color FROM role_settings WHERE guild_id = $1 ORDER BY points',
+            guild_id
+        )
+        
+        role_settings = {}
+        role_colors = {}
+        
+        for row in rows:
+            role_settings[row['points']] = row['role_name']
+            # Сохраняем цвет как строку, потом преобразуем обратно
+            role_colors[row['role_name']] = row['role_color']
+        
+        return role_settings, role_colors
 
 # ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
 
@@ -1003,14 +1011,50 @@ async def on_ready():
     if await db.connect():
         logger.info("✅ База данных подключена")
         
-        # Инициализируем ClanManager ПОСЛЕ подключения к БД
+        # Инициализируем ClanManager
         global clan_manager
         clan_manager = ClanManager(db.pool)
         await clan_manager.init_tables()
         logger.info("✅ Менеджер кланов инициализирован")
+        
+        # Загружаем настройки ролей для каждого сервера отдельно
+        global GUILD_ROLE_SETTINGS, GUILD_ROLE_COLORS
+        for guild in bot.guilds:
+            try:
+                loaded_settings, loaded_colors = await db.load_role_settings(guild.id)
+                if loaded_settings:
+                    GUILD_ROLE_SETTINGS[guild.id] = loaded_settings
+                    # Преобразуем строки цветов обратно в discord.Color
+                    colors = {}
+                    for role_name, color_str in loaded_colors.items():
+                        try:
+                            # Пробуем распарсить цвет
+                            if color_str.startswith('#'):
+                                color_int = int(color_str[1:], 16)
+                                colors[role_name] = discord.Color(color_int)
+                            else:
+                                colors[role_name] = discord.Color.default()
+                        except:
+                            colors[role_name] = discord.Color.default()
+                    GUILD_ROLE_COLORS[guild.id] = colors
+                    logger.info(f"✅ Загружены настройки ролей для сервера {guild.name} ({len(loaded_settings)} ролей)")
+                else:
+                    # Если нет сохраненных, используем стандартные
+                    GUILD_ROLE_SETTINGS[guild.id] = DEFAULT_ROLE_SETTINGS.copy()
+                    GUILD_ROLE_COLORS[guild.id] = DEFAULT_ROLE_COLORS.copy()
+                    logger.info(f"ℹ️ Используются стандартные настройки ролей для сервера {guild.name}")
+            except Exception as e:
+                logger.error(f"❌ Ошибка загрузки ролей для сервера {guild.name}: {e}")
+                # В случае ошибки используем стандартные
+                GUILD_ROLE_SETTINGS[guild.id] = DEFAULT_ROLE_SETTINGS.copy()
+                GUILD_ROLE_COLORS[guild.id] = DEFAULT_ROLE_COLORS.copy()
     else:
         logger.error("❌ Не удалось подключиться к базе данных!")
         logger.warning("⚠️ Бот будет работать без функций базы данных!")
+        # Используем стандартные настройки для всех серверов
+        for guild in bot.guilds:
+            GUILD_ROLE_SETTINGS[guild.id] = DEFAULT_ROLE_SETTINGS.copy()
+            GUILD_ROLE_COLORS[guild.id] = DEFAULT_ROLE_COLORS.copy()
     
     # Запускаем веб-сервер
     await start_web_server()
@@ -1026,6 +1070,22 @@ async def on_ready():
     
     logger.info("🚀 Бот полностью готов к работе!")
     logger.info(f"📡 Веб-сервер доступен по адресу: http://0.0.0.0:{PORT}/")
+
+
+@bot.event
+async def on_guild_join(guild):
+    """Событие при добавлении бота на новый сервер"""
+    # Создаем стандартные настройки для нового сервера
+    GUILD_ROLE_SETTINGS[guild.id] = DEFAULT_ROLE_SETTINGS.copy()
+    GUILD_ROLE_COLORS[guild.id] = DEFAULT_ROLE_COLORS.copy()
+    
+    # Сохраняем в базу данных
+    try:
+        await db.save_role_settings(guild.id, GUILD_ROLE_SETTINGS[guild.id], GUILD_ROLE_COLORS[guild.id])
+        logger.info(f"✅ Созданы стандартные настройки ролей для нового сервера {guild.name}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения настроек для нового сервера {guild.name}: {e}")
+
 
 # ========== КОМАНДЫ ==========
 
@@ -3020,7 +3080,10 @@ async def search_clan(ctx, *, search_term: str):
 @is_admin()
 async def add_role_for_points(ctx, points: int, *, role_name: str):
     """Добавить новую роль за поинты"""
-    global ROLE_SETTINGS, ROLE_COLORS
+    guild_id = ctx.guild.id
+    
+    # Получаем настройки для этого сервера
+    role_settings, role_colors = get_guild_settings(guild_id)
     
     # Проверяем, что количество поинтов положительное
     if points <= 0:
@@ -3033,7 +3096,7 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
         return
     
     # Проверяем, не существует ли уже такая роль
-    if role_name in ROLE_SETTINGS.values():
+    if role_name in role_settings.values():
         embed = discord.Embed(
             title="❌ Ошибка",
             description=f"Роль **{role_name}** уже существует в системе!",
@@ -3043,26 +3106,28 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
         return
     
     # Проверяем, не заняты ли уже такие поинты
-    if points in ROLE_SETTINGS:
+    if points in role_settings:
         embed = discord.Embed(
             title="❌ Ошибка",
-            description=f"За {points} поинтов уже есть роль **{ROLE_SETTINGS[points]}**!\n"
+            description=f"За {points} поинтов уже есть роль **{role_settings[points]}**!\n"
                        f"Используйте `{PREFIX}removerole {points}` чтобы удалить её сначала.",
             color=COLORS['error']
         )
         await safe_send(ctx, embed=embed)
         return
     
-    # Добавляем роль в настройки
-    ROLE_SETTINGS[points] = role_name
+    # Добавляем роль в настройки для этого сервера
+    role_settings[points] = role_name
+    role_colors[role_name] = discord.Color.random()
     
-    # Автоматически назначаем цвет (случайный или по умолчанию)
-    ROLE_COLORS[role_name] = discord.Color.random()
+    # Обновляем глобальные словари
+    GUILD_ROLE_SETTINGS[guild_id] = role_settings
+    GUILD_ROLE_COLORS[guild_id] = role_colors
     
     # СОХРАНЯЕМ В БАЗУ ДАННЫХ
     try:
-        await db.save_role_settings(ctx.guild.id, ROLE_SETTINGS, ROLE_COLORS)
-        logger.info(f"✅ Настройки ролей сохранены в БД для сервера {ctx.guild.id}")
+        await db.save_role_settings(guild_id, role_settings, role_colors)
+        logger.info(f"✅ Настройки ролей сохранены в БД для сервера {guild_id}")
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
         embed = discord.Embed(
@@ -3081,11 +3146,11 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
     
     embed.add_field(name="🎭 Название роли", value=f"**{role_name}**", inline=True)
     embed.add_field(name="💰 Требуемые поинты", value=f"**{points}**", inline=True)
-    embed.add_field(name="🎨 Цвет", value=f"`{ROLE_COLORS[role_name]}`", inline=True)
+    embed.add_field(name="🎨 Цвет", value=f"`{role_colors[role_name]}`", inline=True)
     
-    # Показываем текущую систему ролей
+    # Показываем текущую систему ролей для этого сервера
     roles_text = []
-    for p, name in sorted(ROLE_SETTINGS.items()):
+    for p, name in sorted(role_settings.items()):
         roles_text.append(f"• **{name}** - {p} поинтов")
     
     embed.add_field(
@@ -3096,17 +3161,21 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
     
     await safe_send(ctx, embed=embed)
     
-    # Обновляем роли для всех участников (опционально)
+    # Обновляем роли для всех участников
     await update_all_member_roles(ctx.guild)
+
 
 @bot.command(name='removerole')
 @is_admin()
 async def remove_role_for_points(ctx, points: int):
     """Удалить роль за поинты по количеству поинтов"""
-    global ROLE_SETTINGS, ROLE_COLORS
+    guild_id = ctx.guild.id
+    
+    # Получаем настройки для этого сервера
+    role_settings, role_colors = get_guild_settings(guild_id)
     
     # Проверяем, существует ли роль с такими поинтами
-    if points not in ROLE_SETTINGS:
+    if points not in role_settings:
         embed = discord.Embed(
             title="❌ Ошибка",
             description=f"Роль за {points} поинтов не найдена!",
@@ -3115,7 +3184,7 @@ async def remove_role_for_points(ctx, points: int):
         await safe_send(ctx, embed=embed)
         return
     
-    role_name = ROLE_SETTINGS[points]
+    role_name = role_settings[points]
     
     # Запрашиваем подтверждение
     embed = discord.Embed(
@@ -3131,15 +3200,19 @@ async def remove_role_for_points(ctx, points: int):
             await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
             return
         
-        # Удаляем роль из настроек
-        del ROLE_SETTINGS[points]
-        if role_name in ROLE_COLORS:
-            del ROLE_COLORS[role_name]
+        # Удаляем роль из настроек для этого сервера
+        del role_settings[points]
+        if role_name in role_colors:
+            del role_colors[role_name]
+        
+        # Обновляем глобальные словари
+        GUILD_ROLE_SETTINGS[guild_id] = role_settings
+        GUILD_ROLE_COLORS[guild_id] = role_colors
         
         # СОХРАНЯЕМ В БАЗУ ДАННЫХ
         try:
-            await db.save_role_settings(ctx.guild.id, ROLE_SETTINGS, ROLE_COLORS)
-            logger.info(f"✅ Настройки ролей обновлены в БД для сервера {ctx.guild.id}")
+            await db.save_role_settings(guild_id, role_settings, role_colors)
+            logger.info(f"✅ Настройки ролей обновлены в БД для сервера {guild_id}")
         except Exception as e:
             logger.error(f"❌ Ошибка сохранения ролей в БД: {e}")
         
@@ -3157,10 +3230,10 @@ async def remove_role_for_points(ctx, points: int):
             color=COLORS['success']
         )
         
-        # Показываем обновленную систему
-        if ROLE_SETTINGS:
+        # Показываем обновленную систему для этого сервера
+        if role_settings:
             roles_text = []
-            for p, name in sorted(ROLE_SETTINGS.items()):
+            for p, name in sorted(role_settings.items()):
                 roles_text.append(f"• **{name}** - {p} поинтов")
             confirm_embed.add_field(
                 name="📊 Обновленная система ролей",
@@ -3198,6 +3271,7 @@ async def remove_role_for_points(ctx, points: int):
     view.add_item(cancel_button)
     
     await safe_send(ctx, embed=embed, view=view)
+
 
 @bot.command(name='removerolebyname')
 @is_admin()
