@@ -4414,10 +4414,10 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
                    f"**Пользователь:** {member.mention}\n"
                    f"**Роль:** {role.mention}\n\n"
                    f"**Правила голосования:**\n"
-                   f"• Голосовать могут все участники сервера\n"
+                   f"• Голосовать могут все модераторы\n"
                    f"• Для выдачи роли нужно **минимум 5 голосов ЗА**\n"
-                   f"• После набора 5+ голосов появится кнопка для администратора\n"
-                   f"• Только администратор может выдать роль\n"
+                   f"• После набора 5+ голосов появится кнопка для высшего стаффа\n"
+                   f"• Только высший стафф может выдать роль\n"
                    f"• Голосование длится **2 часа**",
         color=discord.Color.blue()
     )
@@ -4441,7 +4441,7 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
     )
     
     embed.add_field(
-        name="⏳ Условие для выдачи",
+        name="Условие для выдачи",
         value="Нужно **5** голосов ЗА",
         inline=False
     )
@@ -4458,7 +4458,7 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         active_vouches[ctx.channel.id] = view
         
         # Отправляем дополнительное сообщение с пингом (опционально)
-        await ctx.send(f"@everyone Начато голосование за повышение {member.mention} до роли {role.mention}!",
+        await ctx.send(f"Начато голосование за повышение {member.mention} до роли {role.mention}",
                       delete_after=5)
         
         # Логируем создание голосования
