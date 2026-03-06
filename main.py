@@ -969,7 +969,6 @@ async def unlock_all_channels_in_list(guild: discord.Guild, role: discord.Role =
         return [f"❌ Ошибка: {str(e)[:100]}"]
 
 # ========== СОБЫТИЯ БОТА ==========
-
 @bot.event
 async def on_ready():
     """Событие при запуске бота"""
@@ -998,7 +997,6 @@ async def on_ready():
                     colors = {}
                     for role_name, color_str in loaded_colors.items():
                         try:
-                            # Пробуем распарсить цвет
                             if color_str and color_str.startswith('#'):
                                 color_int = int(color_str[1:], 16)
                                 colors[role_name] = discord.Color(color_int)
@@ -1028,6 +1026,10 @@ async def on_ready():
     
     # Запускаем веб-сервер
     await start_web_server()
+    
+    # ЗАПУСКАЕМ ПРОВЕРКУ ИСТЕКШИХ ГОЛОСОВАНИЙ - добавьте это здесь
+    bot.loop.create_task(check_expired_vouches())
+    logger.info("✅ Запущена проверка истекших голосований")
     
     # Устанавливаем статус
     activity_text = f"{PREFIX}help | {len(bot.guilds)} серв."
@@ -4051,11 +4053,603 @@ class VouchView(discord.ui.View):
     """Класс для отображения кнопок голосования"""
     
     def __init__(self, target_user: discord.Member, target_role: discord.Role, initiator: discord.Member):
-        super().__init__(timeout=3600)  # 1 час на голосование
+        super().__init__(timeout=7200)  # 2 часа на голосование
         self.target_user = target_user
         self.target_role = target_role
         self.initiator = initiator
-        self.votes_for = set() 
+        self.votes_for = set()  # Множество ID пользователей, проголосовавших ЗА
+        self.votes_against = set()  # Множество ID пользователей, проголосовавших ПРОТИВ
+        self.message = None  # Сообщение с голосованием
+        self.is_completed = False  # Флаг завершения голосования
+        
+        # Добавляем кнопки
+        self.add_item(VouchForButton())
+        self.add_item(VouchAgainstButton())
+        self.add_item(VouchShowVotesButton())
+    
+    async def update_embed(self):
+        """Обновить embed с текущей статистикой голосования"""
+        embed = discord.Embed(
+            title=f"🗳️ Голосование за повышение {self.target_user.display_name}",
+            description=f"**Предложил:** {self.initiator.mention}\n"
+                       f"**Пользователь:** {self.target_user.mention}\n"
+                       f"**Роль:** {self.target_role.mention}",
+            color=discord.Color.blue()
+        )
+        
+        embed.add_field(
+            name="✅ ЗА",
+            value=f"**{len(self.votes_for)}** голос(ов)",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="❌ ПРОТИВ",
+            value=f"**{len(self.votes_against)}** голос(ов)",
+            inline=True
+        )
+        
+        embed.add_field(
+            name="📊 Всего проголосовало",
+            value=f"**{len(self.votes_for) + len(self.votes_against)}**",
+            inline=True
+        )
+        
+        # Прогресс-бар
+        total_votes = len(self.votes_for) + len(self.votes_against)
+        if total_votes > 0:
+            for_percent = (len(self.votes_for) / total_votes) * 100
+            bar_length = 20
+            filled = int(bar_length * for_percent / 100)
+            bar = "█" * filled + "░" * (bar_length - filled)
+            embed.add_field(
+                name="📈 Прогресс",
+                value=f"`{bar}` {for_percent:.1f}%",
+                inline=False
+            )
+        
+        # Добавляем информацию о необходимом условии
+        if len(self.votes_for) >= 5:  # Условие: минимум 5 голосов ЗА
+            embed.add_field(
+                name="✅ Условие выполнено",
+                value="Набрано 5+ голосов ЗА! Администратор может выдать роль.",
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name="⏳ Условие для выдачи",
+                value=f"Нужно **5** голосов ЗА (сейчас {len(self.votes_for)})",
+                inline=False
+            )
+        
+        embed.set_footer(text=f"Голосование создано: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+        
+        if self.message:
+            await self.message.edit(embed=embed, view=self)
+    
+    async def check_votes(self):
+        """Проверить количество голосов"""
+        # Если набрано 5+ голосов ЗА, автоматически добавляем кнопку для админа
+        if len(self.votes_for) >= 5 and not self.is_completed:
+            # Проверяем, нет ли уже кнопки выдачи
+            has_give_button = False
+            for item in self.children:
+                if isinstance(item, VouchGiveRoleButton):
+                    has_give_button = True
+                    break
+            
+            if not has_give_button:
+                self.add_item(VouchGiveRoleButton())
+                await self.update_embed()
+                
+                # Отправляем уведомление админам
+                if self.message and self.message.guild:
+                    # Пингуем админские роли
+                    admin_mentions = []
+                    for role_id in ADMIN_ROLE_IDS:
+                        role = self.message.guild.get_role(role_id)
+                        if role:
+                            admin_mentions.append(role.mention)
+                    
+                    if admin_mentions:
+                        await self.message.channel.send(
+                            f"{' '.join(admin_mentions)} Набрано 5+ голосов за повышение {self.target_user.mention} до роли {self.target_role.mention}!",
+                            delete_after=10
+                        )
+
+
+class VouchForButton(discord.ui.Button):
+    """Кнопка для голосования ЗА"""
+    
+    def __init__(self):
+        super().__init__(style=discord.ButtonStyle.success, label="ЗА", emoji="✅", row=0)
+    
+    async def callback(self, interaction: discord.Interaction):
+        view: VouchView = self.view
+        
+        if view.is_completed:
+            await interaction.response.send_message("❌ Голосование уже завершено!", ephemeral=True)
+            return
+        
+        # Проверяем, не голосовал ли уже пользователь
+        if interaction.user.id in view.votes_for:
+            await interaction.response.send_message("❌ Вы уже проголосовали ЗА!", ephemeral=True)
+            return
+        if interaction.user.id in view.votes_against:
+            # Перемещаем голос из ПРОТИВ в ЗА
+            view.votes_against.remove(interaction.user.id)
+            view.votes_for.add(interaction.user.id)
+            await interaction.response.send_message("✅ Ваш голос изменен на ЗА!", ephemeral=True)
+        else:
+            view.votes_for.add(interaction.user.id)
+            await interaction.response.send_message("✅ Вы проголосовали ЗА!", ephemeral=True)
+        
+        await view.update_embed()
+        await view.check_votes()
+
+
+class VouchAgainstButton(discord.ui.Button):
+    """Кнопка для голосования ПРОТИВ"""
+    
+    def __init__(self):
+        super().__init__(style=discord.ButtonStyle.danger, label="ПРОТИВ", emoji="❌", row=0)
+    
+    async def callback(self, interaction: discord.Interaction):
+        view: VouchView = self.view
+        
+        if view.is_completed:
+            await interaction.response.send_message("❌ Голосование уже завершено!", ephemeral=True)
+            return
+        
+        # Проверяем, не голосовал ли уже пользователь
+        if interaction.user.id in view.votes_against:
+            await interaction.response.send_message("❌ Вы уже проголосовали ПРОТИВ!", ephemeral=True)
+            return
+        if interaction.user.id in view.votes_for:
+            # Перемещаем голос из ЗА в ПРОТИВ
+            view.votes_for.remove(interaction.user.id)
+            view.votes_against.add(interaction.user.id)
+            await interaction.response.send_message("✅ Ваш голос изменен на ПРОТИВ!", ephemeral=True)
+        else:
+            view.votes_against.add(interaction.user.id)
+            await interaction.response.send_message("✅ Вы проголосовали ПРОТИВ!", ephemeral=True)
+        
+        await view.update_embed()
+        await view.check_votes()
+
+
+class VouchShowVotesButton(discord.ui.Button):
+    """Кнопка для показа списка проголосовавших"""
+    
+    def __init__(self):
+        super().__init__(style=discord.ButtonStyle.secondary, label="Кто проголосовал", emoji="📋", row=1)
+    
+    async def callback(self, interaction: discord.Interaction):
+        view: VouchView = self.view
+        
+        embed = discord.Embed(
+            title="📋 Список проголосовавших",
+            color=discord.Color.blue()
+        )
+        
+        # Формируем список ЗА
+        if view.votes_for:
+            for_voters = []
+            for user_id in list(view.votes_for)[:20]:  # Показываем первые 20
+                user = interaction.guild.get_member(user_id)
+                if user:
+                    for_voters.append(f"• {user.mention}")
+                else:
+                    for_voters.append(f"• Пользователь {user_id}")
+            
+            embed.add_field(
+                name=f"✅ ЗА ({len(view.votes_for)})",
+                value="\n".join(for_voters) if for_voters else "Нет голосов",
+                inline=False
+            )
+        else:
+            embed.add_field(name="✅ ЗА", value="Нет голосов", inline=False)
+        
+        # Формируем список ПРОТИВ
+        if view.votes_against:
+            against_voters = []
+            for user_id in list(view.votes_against)[:20]:  # Показываем первые 20
+                user = interaction.guild.get_member(user_id)
+                if user:
+                    against_voters.append(f"• {user.mention}")
+                else:
+                    against_voters.append(f"• Пользователь {user_id}")
+            
+            embed.add_field(
+                name=f"❌ ПРОТИВ ({len(view.votes_against)})",
+                value="\n".join(against_voters) if against_voters else "Нет голосов",
+                inline=False
+            )
+        else:
+            embed.add_field(name="❌ ПРОТИВ", value="Нет голосов", inline=False)
+        
+        embed.set_footer(text=f"Всего проголосовало: {len(view.votes_for) + len(view.votes_against)}")
+        
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class VouchGiveRoleButton(discord.ui.Button):
+    """Кнопка для выдачи роли (только для админов)"""
+    
+    def __init__(self):
+        super().__init__(style=discord.ButtonStyle.primary, label="ВЫДАТЬ РОЛЬ", emoji="🎁", row=1)
+    
+    async def callback(self, interaction: discord.Interaction):
+        view: VouchView = self.view
+        
+        # Проверяем, является ли пользователь админом
+        is_admin = interaction.user.guild_permissions.administrator
+        if not is_admin:
+            # Проверяем кастомные админские роли
+            user_role_ids = [role.id for role in interaction.user.roles]
+            is_admin = any(admin_role_id in user_role_ids for admin_role_id in ADMIN_ROLE_IDS)
+        
+        if not is_admin:
+            await interaction.response.send_message("❌ Только администраторы могут выдавать роли!", ephemeral=True)
+            return
+        
+        if view.is_completed:
+            await interaction.response.send_message("❌ Голосование уже завершено!", ephemeral=True)
+            return
+        
+        # Проверяем условие (5+ голосов ЗА)
+        if len(view.votes_for) < 5:
+            await interaction.response.send_message(f"❌ Недостаточно голосов! Нужно минимум 5 голосов ЗА (сейчас {len(view.votes_for)})", ephemeral=True)
+            return
+        
+        # Выдаем роль
+        try:
+            await view.target_user.add_roles(view.target_role, reason=f"Повышение по результатам голосования (админ: {interaction.user})")
+            
+            view.is_completed = True
+            
+            # Создаем embed с результатом
+            embed = discord.Embed(
+                title="✅ РОЛЬ ВЫДАНА",
+                description=f"**{view.target_user.mention} повышен до {view.target_role.mention}!**",
+                color=discord.Color.green()
+            )
+            
+            embed.add_field(
+                name="📊 Итоги голосования",
+                value=f"✅ ЗА: {len(view.votes_for)}\n"
+                      f"❌ ПРОТИВ: {len(view.votes_against)}",
+                inline=False
+            )
+            
+            embed.add_field(
+                name="👤 Выдал",
+                value=interaction.user.mention,
+                inline=True
+            )
+            
+            embed.set_footer(text=f"Голосование инициировано: {view.initiator.display_name}")
+            
+            # Отключаем все кнопки
+            for item in view.children:
+                item.disabled = True
+            
+            await view.message.edit(embed=embed, view=view)
+            
+            await interaction.response.send_message(f"✅ Роль {view.target_role.mention} успешно выдана пользователю {view.target_user.mention}!", ephemeral=True)
+            
+            # Отправляем уведомление в ЛС пользователю
+            try:
+                dm_embed = discord.Embed(
+                    title="🎉 Вас повысили!",
+                    description=f"На сервере **{interaction.guild.name}** вы получили роль **{view.target_role.name}** по результатам голосования!",
+                    color=discord.Color.gold()
+                )
+                await view.target_user.send(embed=dm_embed)
+            except:
+                pass  # Игнорируем ошибки отправки в ЛС
+                
+        except Exception as e:
+            logger.error(f"Ошибка при выдаче роли: {e}")
+            await interaction.response.send_message(f"❌ Ошибка при выдаче роли: {str(e)[:100]}", ephemeral=True)
+
+
+# Хранилище активных голосований
+active_vouches = {}  # {channel_id: view}
+
+
+@bot.command(name='vouch')
+@is_admin()
+async def vouch_command(ctx, member: discord.Member, role: discord.Role):
+    """
+    Создать голосование за повышение пользователя
+    
+    Примеры:
+    !vouch @User @Роль
+    !vouch @Игрок @Raider
+    """
+    # Проверяем, что роль существует на сервере
+    if role not in ctx.guild.roles:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Указанная роль не найдена на сервере!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Проверяем, что пользователь не является ботом
+    if member.bot:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Нельзя проводить голосование за бота!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Проверяем, что пользователь не админ (опционально)
+    if member.guild_permissions.administrator:
+        embed = discord.Embed(
+            title="⚠️ Предупреждение",
+            description="Вы проводите голосование за администратора сервера. Убедитесь, что это необходимо.",
+            color=COLORS['warning']
+        )
+        await safe_send(ctx, embed=embed)
+    
+    # Проверяем, нет ли уже активного голосования в этом канале
+    if ctx.channel.id in active_vouches:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="В этом канале уже есть активное голосование! Дождитесь его завершения.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Создаем embed для голосования
+    embed = discord.Embed(
+        title=f"🗳️ Голосование за повышение {member.display_name}",
+        description=f"**Предложил:** {ctx.author.mention}\n"
+                   f"**Пользователь:** {member.mention}\n"
+                   f"**Роль:** {role.mention}\n\n"
+                   f"**Правила голосования:**\n"
+                   f"• Голосовать могут все участники сервера\n"
+                   f"• Для выдачи роли нужно **минимум 5 голосов ЗА**\n"
+                   f"• После набора 5+ голосов появится кнопка для администратора\n"
+                   f"• Только администратор может выдать роль\n"
+                   f"• Голосование длится **2 часа**",
+        color=discord.Color.blue()
+    )
+    
+    embed.add_field(
+        name="✅ ЗА",
+        value="**0** голосов",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="❌ ПРОТИВ",
+        value="**0** голосов",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📊 Всего",
+        value="**0**",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="⏳ Условие для выдачи",
+        value="Нужно **5** голосов ЗА",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"Голосование создано: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    
+    # Создаем view с кнопками
+    view = VouchView(member, role, ctx.author)
+    
+    # Отправляем сообщение
+    message = await safe_send(ctx, embed=embed, view=view)
+    if message:
+        view.message = message
+        active_vouches[ctx.channel.id] = view
+        
+        # Отправляем дополнительное сообщение с пингом (опционально)
+        await ctx.send(f"@everyone Начато голосование за повышение {member.mention} до роли {role.mention}!",
+                      delete_after=5)
+        
+        # Логируем создание голосования
+        logger.info(f"Создано голосование за {member} до роли {role} пользователем {ctx.author}")
+
+
+@bot.command(name='endvouch')
+@is_admin()
+async def end_vouch_command(ctx):
+    """
+    Принудительно завершить активное голосование в текущем канале
+    """
+    if ctx.channel.id not in active_vouches:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="В этом канале нет активного голосования!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    view = active_vouches[ctx.channel.id]
+    
+    # Запрашиваем подтверждение
+    embed = discord.Embed(
+        title="⚠️ Подтверждение",
+        description="Вы уверены, что хотите принудительно завершить голосование?",
+        color=COLORS['warning']
+    )
+    
+    view_confirm = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        view.is_completed = True
+        
+        # Отключаем все кнопки
+        for item in view.children:
+            item.disabled = True
+        
+        # Обновляем embed
+        embed_result = discord.Embed(
+            title="🗳️ Голосование завершено",
+            description=f"Голосование за {view.target_user.mention} было принудительно завершено.",
+            color=COLORS['warning']
+        )
+        
+        embed_result.add_field(
+            name="📊 Итоги",
+            value=f"✅ ЗА: {len(view.votes_for)}\n"
+                  f"❌ ПРОТИВ: {len(view.votes_against)}",
+            inline=False
+        )
+        
+        embed_result.add_field(
+            name="👤 Завершил",
+            value=interaction.user.mention,
+            inline=True
+        )
+        
+        await view.message.edit(embed=embed_result, view=view)
+        
+        # Удаляем из активных голосований
+        del active_vouches[ctx.channel.id]
+        
+        await interaction.response.edit_message(content="✅ Голосование завершено!", embed=None, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        await interaction.response.edit_message(content="❌ Отменено", embed=None, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view_confirm.add_item(confirm_button)
+    view_confirm.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view_confirm)
+
+
+@bot.command(name='vouchinfo')
+async def vouch_info_command(ctx):
+    """
+    Показать информацию об активном голосовании в текущем канале
+    """
+    if ctx.channel.id not in active_vouches:
+        embed = discord.Embed(
+            title="ℹ️ Информация",
+            description="В этом канале нет активного голосования.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    view = active_vouches[ctx.channel.id]
+    
+    embed = discord.Embed(
+        title="📊 Информация об активном голосовании",
+        color=COLORS['info']
+    )
+    
+    embed.add_field(name="👤 Пользователь", value=view.target_user.mention, inline=True)
+    embed.add_field(name="🎭 Роль", value=view.target_role.mention, inline=True)
+    embed.add_field(name="👑 Инициатор", value=view.initiator.mention, inline=True)
+    
+    embed.add_field(name="✅ ЗА", value=str(len(view.votes_for)), inline=True)
+    embed.add_field(name="❌ ПРОТИВ", value=str(len(view.votes_against)), inline=True)
+    embed.add_field(name="📊 Всего", value=str(len(view.votes_for) + len(view.votes_against)), inline=True)
+    
+    # Проверяем, есть ли кнопка выдачи
+    has_give_button = False
+    for item in view.children:
+        if isinstance(item, VouchGiveRoleButton):
+            has_give_button = True
+            break
+    
+    if has_give_button:
+        embed.add_field(
+            name="🎁 Статус",
+            value="✅ Условие выполнено! Администратор может выдать роль.",
+            inline=False
+        )
+    else:
+        embed.add_field(
+            name="⏳ Статус",
+            value=f"Нужно ещё {max(0, 5 - len(view.votes_for))} голосов ЗА",
+            inline=False
+        )
+    
+    await safe_send(ctx, embed=embed)
+
+
+# Добавляем обработчик timeout для очистки завершенных голосований
+async def check_expired_vouches():
+    """Периодическая проверка истекших голосований"""
+    await bot.wait_until_ready()
+    
+    while not bot.is_closed():
+        try:
+            current_time = datetime.now().timestamp()
+            expired_channels = []
+            
+            for channel_id, view in list(active_vouches.items()):
+                # Проверяем, не истекло ли время (2 часа)
+                if view.message and (current_time - view.message.created_at.timestamp()) > 7200:
+                    if not view.is_completed:
+                        view.is_completed = True
+                        
+                        # Отключаем кнопки
+                        for item in view.children:
+                            item.disabled = True
+                        
+                        # Обновляем embed
+                        embed = discord.Embed(
+                            title="⏰ Время истекло",
+                            description=f"Голосование за {view.target_user.mention} автоматически завершено по истечении времени.",
+                            color=COLORS['warning']
+                        )
+                        
+                        embed.add_field(
+                            name="📊 Итоги",
+                            value=f"✅ ЗА: {len(view.votes_for)}\n"
+                                  f"❌ ПРОТИВ: {len(view.votes_against)}",
+                            inline=False
+                        )
+                        
+                        try:
+                            await view.message.edit(embed=embed, view=view)
+                        except:
+                            pass
+                    
+                    expired_channels.append(channel_id)
+            
+            # Удаляем истекшие голосования из активных
+            for channel_id in expired_channels:
+                if channel_id in active_vouches:
+                    del active_vouches[channel_id]
+            
+        except Exception as e:
+            logger.error(f"Ошибка в проверке истекших голосований: {e}")
+        
+        await asyncio.sleep(60)  # Проверяем каждую минуту
 
 
 # ========== КОМАНДА HELP ==========
