@@ -4167,6 +4167,11 @@ class VouchForButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         view: VouchView = self.view
         
+        # ПРОВЕРКА: Нельзя голосовать за самого себя
+        if interaction.user.id == view.target_user.id:
+            await interaction.response.send_message("❌ Вы не можете голосовать за самого себя!", ephemeral=True)
+            return
+        
         if view.is_completed:
             await interaction.response.send_message("❌ Голосование уже завершено!", ephemeral=True)
             return
@@ -4196,6 +4201,11 @@ class VouchAgainstButton(discord.ui.Button):
     
     async def callback(self, interaction: discord.Interaction):
         view: VouchView = self.view
+        
+        # ПРОВЕРКА: Нельзя голосовать за самого себя
+        if interaction.user.id == view.target_user.id:
+            await interaction.response.send_message("❌ Вы не можете голосовать за самого себя!", ephemeral=True)
+            return
         
         if view.is_completed:
             await interaction.response.send_message("❌ Голосование уже завершено!", ephemeral=True)
@@ -4268,9 +4278,12 @@ class VouchShowVotesButton(discord.ui.Button):
         else:
             embed.add_field(name="❌ ПРОТИВ", value="Нет голосов", inline=False)
         
-        embed.set_footer(text=f"Всего проголосовало: {len(view.votes_for) + len(view.votes_against)}")
+        # Добавляем информацию о том, что голосующий не может голосовать за себя
+        embed.set_footer(text=f"Всего проголосовало: {len(view.votes_for) + len(view.votes_against)} | Нельзя голосовать за себя")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
 
 
 class VouchGiveRoleButton(discord.ui.Button):
@@ -4368,6 +4381,16 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
     !vouch @User @Роль
     !vouch @Игрок @Raider
     """
+    # Проверка: инициатор не может создавать голосование за себя
+    if member.id == ctx.author.id:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Вы не можете создать голосование за самого себя!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
     # Проверяем, что роль существует на сервере
     if role not in ctx.guild.roles:
         embed = discord.Embed(
@@ -4409,15 +4432,16 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
     
     # Создаем embed для голосования
     embed = discord.Embed(
-        title=f"🗳️ Голосование за повышение {member.display_name}",
+        title=f"🗳️ Голосование за повышение {member.displayName}",
         description=f"**Предложил:** {ctx.author.mention}\n"
                    f"**Пользователь:** {member.mention}\n"
                    f"**Роль:** {role.mention}\n\n"
                    f"**Правила голосования:**\n"
-                   f"• Голосовать могут все модераторы\n"
+                   f"• Голосовать могут все участники сервера\n"
+                   f"• **Нельзя голосовать за самого себя**\n"
                    f"• Для выдачи роли нужно **минимум 5 голосов ЗА**\n"
-                   f"• После набора 5+ голосов появится кнопка для высшего стаффа\n"
-                   f"• Только высший стафф может выдать роль\n"
+                   f"• После набора 5+ голосов появится кнопка для администратора\n"
+                   f"• Только администратор может выдать роль\n"
                    f"• Голосование длится **2 часа**",
         color=discord.Color.blue()
     )
@@ -4441,12 +4465,12 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
     )
     
     embed.add_field(
-        name="Условие для выдачи",
+        name="⏳ Условие для выдачи",
         value="Нужно **5** голосов ЗА",
         inline=False
     )
     
-    embed.set_footer(text=f"Голосование создано: {datetime.now().strftime('%d.%m.%Y %H:%M')}")
+    embed.set_footer(text=f"Голосование создано: {datetime.now().strftime('%d.%m.%Y %H:%M')} | Нельзя голосовать за себя")
     
     # Создаем view с кнопками
     view = VouchView(member, role, ctx.author)
@@ -4458,11 +4482,13 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         active_vouches[ctx.channel.id] = view
         
         # Отправляем дополнительное сообщение с пингом (опционально)
-        await ctx.send(f"Начато голосование за повышение {member.mention} до роли {role.mention}",
+        await ctx.send(f"@everyone Начато голосование за повышение {member.mention} до роли {role.mention}!",
                       delete_after=5)
         
         # Логируем создание голосования
         logger.info(f"Создано голосование за {member} до роли {role} пользователем {ctx.author}")
+
+
 
 
 @bot.command(name='endvouch')
