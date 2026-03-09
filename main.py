@@ -750,31 +750,46 @@ async def handle_oauth_callback(request):
     return await create_results_page(user_data, guilds_data)
 
 async def create_results_page(user_data, guilds_data):
+    """Создать страницу с результатами проверки"""
     enemy_servers = []
     ally_servers = []
     neutral_servers = []
     other_servers = []
     
-    for guild in guilds_data:
+    # Сортируем серверы по названию для удобства
+    sorted_guilds = sorted(guilds_data, key=lambda x: x['name'].lower())
+    
+    for guild in sorted_guilds:
         guild_info = {
             "id": guild['id'],
             "name": guild['name'],
             "icon": guild.get('icon'),
             "owner": guild.get('owner', False),
-            "permissions": guild.get('permissions', '0')
+            "permissions": guild.get('permissions', '0'),
+            "approximate_member_count": guild.get('approximate_member_count', '?')
         }
         
         guild_id = int(guild['id'])
         
-        if 'enemy' in guild['name'].lower() or 'враг' in guild['name'].lower():
+        # Здесь нужно будет подключить ваши словари ENEMY_SERVERS и т.д.
+        # Пока просто разделяем по ключевым словам
+        name_lower = guild['name'].lower()
+        if 'enemy' in name_lower or 'враг' in name_lower or 'raid' in name_lower:
             enemy_servers.append(guild_info)
-        elif 'ally' in guild['name'].lower() or 'союз' in guild['name'].lower():
+        elif 'ally' in name_lower or 'союз' in name_lower or 'friend' in name_lower:
             ally_servers.append(guild_info)
-        elif 'peace' in guild['name'].lower() or 'нейтр' in guild['name'].lower():
+        elif 'peace' in name_lower or 'нейтр' in name_lower or 'neutral' in name_lower:
             neutral_servers.append(guild_info)
         else:
             other_servers.append(guild_info)
     
+    # Сортируем каждую категорию
+    enemy_servers.sort(key=lambda x: x['name'])
+    ally_servers.sort(key=lambda x: x['name'])
+    neutral_servers.sort(key=lambda x: x['name'])
+    other_servers.sort(key=lambda x: x['name'])
+    
+    # Создаем HTML с прокруткой для всех серверов
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -782,22 +797,132 @@ async def create_results_page(user_data, guilds_data):
         <title>Результаты проверки</title>
         <meta charset="UTF-8">
         <style>
-            body {{ font-family: Arial, sans-serif; padding: 20px; background: #1a1a1a; color: #fff; }}
-            .container {{ max-width: 800px; margin: 0 auto; }}
-            .user-info {{ background: #2d2d2d; padding: 20px; border-radius: 10px; margin-bottom: 20px; }}
-            .server-list {{ margin-top: 20px; }}
-            .server-item {{ padding: 10px; margin: 5px 0; border-radius: 5px; }}
-            .enemy {{ background: #4a1e1e; border-left: 5px solid #f44336; }}
-            .ally {{ background: #1e4a1e; border-left: 5px solid #4CAF50; }}
-            .neutral {{ background: #1e3a4a; border-left: 5px solid #2196F3; }}
-            .other {{ background: #2d2d2d; border-left: 5px solid #9e9e9e; }}
-            .stats {{ display: flex; gap: 10px; margin: 20px 0; }}
-            .stat-box {{ flex: 1; padding: 15px; text-align: center; border-radius: 5px; color: white; }}
+            body {{ 
+                font-family: Arial, sans-serif; 
+                padding: 20px; 
+                background: #1a1a1a; 
+                color: #fff; 
+                margin: 0;
+            }}
+            .container {{ 
+                max-width: 1200px; 
+                margin: 0 auto; 
+            }}
+            .user-info {{ 
+                background: #2d2d2d; 
+                padding: 20px; 
+                border-radius: 10px; 
+                margin-bottom: 20px; 
+                position: sticky;
+                top: 0;
+                z-index: 100;
+            }}
+            .stats {{ 
+                display: flex; 
+                gap: 10px; 
+                margin: 20px 0; 
+                flex-wrap: wrap;
+            }}
+            .stat-box {{ 
+                flex: 1; 
+                min-width: 150px;
+                padding: 15px; 
+                text-align: center; 
+                border-radius: 5px; 
+                color: white; 
+                font-weight: bold;
+            }}
             .stat-enemy {{ background: #f44336; }}
             .stat-ally {{ background: #4CAF50; }}
             .stat-neutral {{ background: #2196F3; }}
             .stat-other {{ background: #9e9e9e; }}
-            h2, h3 {{ color: #fff; }}
+            
+            .server-section {{
+                margin-bottom: 30px;
+                background: #2d2d2d;
+                border-radius: 10px;
+                padding: 20px;
+            }}
+            
+            .server-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+                gap: 10px;
+                margin-top: 15px;
+            }}
+            
+            .server-item {{ 
+                padding: 12px; 
+                border-radius: 5px; 
+                word-break: break-word;
+            }}
+            .enemy {{ background: #4a1e1e; border-left: 5px solid #f44336; }}
+            .ally {{ background: #1e4a1e; border-left: 5px solid #4CAF50; }}
+            .neutral {{ background: #1e3a4a; border-left: 5px solid #2196F3; }}
+            .other {{ background: #333; border-left: 5px solid #9e9e9e; }}
+            
+            .server-name {{
+                font-weight: bold;
+                font-size: 16px;
+                margin-bottom: 5px;
+            }}
+            
+            .server-details {{
+                font-size: 12px;
+                color: #aaa;
+            }}
+            
+            h2, h3 {{ 
+                color: #fff; 
+                margin-top: 0;
+            }}
+            
+            .section-title {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                cursor: pointer;
+                padding: 10px;
+                background: #3d3d3d;
+                border-radius: 5px;
+                margin-bottom: 10px;
+            }}
+            
+            .section-title:hover {{
+                background: #4d4d4d;
+            }}
+            
+            .toggle-icon {{
+                font-size: 20px;
+            }}
+            
+            .hidden {{
+                display: none;
+            }}
+            
+            .search-box {{
+                width: 100%;
+                padding: 10px;
+                margin-bottom: 20px;
+                border-radius: 5px;
+                border: none;
+                background: #3d3d3d;
+                color: white;
+                font-size: 16px;
+            }}
+            
+            .search-box::placeholder {{
+                color: #888;
+            }}
+            
+            .count-badge {{
+                background: #4d4d4d;
+                padding: 3px 8px;
+                border-radius: 12px;
+                font-size: 14px;
+                margin-left: 10px;
+            }}
+            
             a {{ color: #5865F2; text-decoration: none; }}
             a:hover {{ text-decoration: underline; }}
         </style>
@@ -820,58 +945,112 @@ async def create_results_page(user_data, guilds_data):
                 <div class="stat-box stat-other">📌 ДРУГИЕ<br>{len(other_servers)}</div>
             </div>
             
-            <div class="server-list">
-                <h2>📋 ВСЕ СЕРВЕРЫ ПОЛЬЗОВАТЕЛЯ</h2>
+            <input type="text" class="search-box" id="searchInput" placeholder="🔍 Поиск серверов..." onkeyup="filterServers()">
+            
+            <div id="servers-container">
     """
     
-    if enemy_servers:
-        html += "<h3 style='color: #f44336;'>⚠️ ВРАЖЕСКИЕ СЕРВЕРЫ</h3>"
-        for server in enemy_servers:
-            html += f"""
-                <div class="server-item enemy">
-                    <strong>{server['name']}</strong> (ID: {server['id']})
-                    {' 👑 Владелец' if server['owner'] else ''}
+    # Функция для добавления секции серверов
+    def add_server_section(title, servers, color_class, emoji):
+        if not servers:
+            return ""
+        
+        section_html = f"""
+            <div class="server-section">
+                <div class="section-title" onclick="toggleSection('{color_class}')">
+                    <span><h3 style="margin:0;">{emoji} {title} <span class="count-badge">{len(servers)}</span></h3></span>
+                    <span class="toggle-icon" id="toggle-{color_class}">▼</span>
                 </div>
+                <div class="server-grid {color_class}-grid" id="section-{color_class}">
+        """
+        
+        for server in servers:
+            owner_tag = " 👑 Владелец" if server['owner'] else ""
+            members = f" 👥 {server['approximate_member_count']} уч." if server['approximate_member_count'] != '?' else ""
+            
+            section_html += f"""
+                    <div class="server-item {color_class}">
+                        <div class="server-name">{server['name']}{owner_tag}</div>
+                        <div class="server-details">
+                            ID: {server['id']}{members}
+                        </div>
+                    </div>
             """
+        
+        section_html += """
+                </div>
+            </div>
+        """
+        return section_html
     
-    if ally_servers:
-        html += "<h3 style='color: #4CAF50;'>🤝 СОЮЗНЫЕ СЕРВЕРЫ</h3>"
-        for server in ally_servers:
-            html += f"""
-                <div class="server-item ally">
-                    <strong>{server['name']}</strong> (ID: {server['id']})
-                    {' 👑 Владелец' if server['owner'] else ''}
-                </div>
-            """
-    
-    if neutral_servers:
-        html += "<h3 style='color: #2196F3;'>🕊️ НЕЙТРАЛЬНЫЕ СЕРВЕРЫ</h3>"
-        for server in neutral_servers:
-            html += f"""
-                <div class="server-item neutral">
-                    <strong>{server['name']}</strong> (ID: {server['id']})
-                    {' 👑 Владелец' if server['owner'] else ''}
-                </div>
-            """
-    
-    if other_servers:
-        html += "<h3 style='color: #9e9e9e;'>📌 ДРУГИЕ СЕРВЕРЫ</h3>"
-        for server in other_servers[:10]:
-            html += f"""
-                <div class="server-item other">
-                    <strong>{server['name']}</strong> (ID: {server['id']})
-                    {' 👑 Владелец' if server['owner'] else ''}
-                </div>
-            """
-        if len(other_servers) > 10:
-            html += f"<p>... и ещё {len(other_servers) - 10} серверов</p>"
+    # Добавляем все секции
+    html += add_server_section("ВРАЖЕСКИЕ СЕРВЕРЫ", enemy_servers, "enemy", "⚠️")
+    html += add_server_section("СОЮЗНЫЕ СЕРВЕРЫ", ally_servers, "ally", "🤝")
+    html += add_server_section("НЕЙТРАЛЬНЫЕ СЕРВЕРЫ", neutral_servers, "neutral", "🕊️")
+    html += add_server_section("ДРУГИЕ СЕРВЕРЫ", other_servers, "other", "📌")
     
     html += """
             </div>
-            <p style="margin-top: 20px;">
+            
+            <p style="margin-top: 20px; text-align: center;">
                 <a href="/oauth2/login">🔄 Проверить другого пользователя</a>
             </p>
         </div>
+        
+        <script>
+            // Поиск серверов
+            function filterServers() {
+                const input = document.getElementById('searchInput');
+                const filter = input.value.toLowerCase();
+                const containers = document.querySelectorAll('.server-grid');
+                
+                containers.forEach(container => {
+                    const items = container.getElementsByClassName('server-item');
+                    let visibleCount = 0;
+                    
+                    Array.from(items).forEach(item => {
+                        const text = item.textContent.toLowerCase();
+                        if (text.includes(filter)) {
+                            item.style.display = 'block';
+                            visibleCount++;
+                        } else {
+                            item.style.display = 'none';
+                        }
+                    });
+                    
+                    // Показываем/скрываем заголовок секции если нет видимых элементов
+                    const section = container.closest('.server-section');
+                    if (section) {
+                        const title = section.querySelector('.section-title h3');
+                        if (title) {
+                            const match = title.innerHTML.match(/\d+/);
+                            if (match) {
+                                title.innerHTML = title.innerHTML.replace(match[0], visibleCount);
+                            }
+                        }
+                    }
+                });
+            }
+            
+            // Сворачивание/разворачивание секций
+            function toggleSection(sectionClass) {
+                const grid = document.getElementById('section-' + sectionClass);
+                const toggle = document.getElementById('toggle-' + sectionClass);
+                
+                if (grid.classList.contains('hidden')) {
+                    grid.classList.remove('hidden');
+                    toggle.innerHTML = '▼';
+                } else {
+                    grid.classList.add('hidden');
+                    toggle.innerHTML = '▶';
+                }
+            }
+            
+            // Добавляем класс hidden в CSS
+            const style = document.createElement('style');
+            style.innerHTML = '.hidden { display: none !important; }';
+            document.head.appendChild(style);
+        </script>
     </body>
     </html>
     """
