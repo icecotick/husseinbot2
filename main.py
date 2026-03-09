@@ -61,7 +61,7 @@ COLORS = {
 
 GIFS = {
     'ally': 'https://cdn.discordapp.com/attachments/1436012207606595774/1480486064723595324/aniyuki-gojo-satoru-gif-23.gif?ex=69afd997&is=69ae8817&hm=d5392f0643225fb1391075e829b488e69db9386b9cfed8479ce4b48ae3cb2220&',
-    'enemy': 'https://media.tenor.com/hp1qKBQclPMAAAPo/jujutsu-kaisen-shibuya-arc-sukuna-domain-expansion.mp4',
+    'enemy': 'https://cdn.discordapp.com/attachments/1436012207606595774/1480496324179787857/jujutsu-kaisen-shibuya-arc-sukuna-domain-expansion.gif?ex=69afe325&is=69ae91a5&hm=cdfb1840b17659a4ddb9e5906c50a0217bd09e18f8b8feece11c20184b1971fc&',
     'peace': 'https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&'
 }
 
