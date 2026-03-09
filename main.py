@@ -82,7 +82,8 @@ ENEMY_SERVERS = {
 }
 
 ALLY_SERVERS = {
-    "Название союзного сервера 1": 123456789012345680,
+    "FANTOM DESTROYERS": 1439693734475464918,
+    "Reborn The Fallen Fantoms": 1453345739034853490,
 }
 
 NEUTRAL_SERVERS = {
