@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, List
 from dotenv import load_dotenv
 import asyncpg
@@ -13,8 +13,6 @@ import time
 import aiohttp
 import secrets
 from urllib.parse import urlencode
-from datetime import datetime, timedelta
-import json
 
 # Настройка логирования
 logging.basicConfig(
@@ -38,7 +36,7 @@ PORT = int(os.getenv('PORT', '10000'))
 # ========== OAuth2 НАСТРОЙКИ ==========
 CLIENT_ID = os.getenv('CLIENT_ID')
 CLIENT_SECRET = os.getenv('CLIENT_SECRET')
-REDIRECT_URI = f"https://husseinbot2.onrender.com/oauth2/callback"  # ЗАМЕНИТЕ!
+REDIRECT_URI = f"https://ваш-бот.onrender.com/oauth2/callback"  # ЗАМЕНИТЕ!
 OAUTH2_SCOPES = ["identify", "guilds"]
 oauth_states = {}
 
@@ -73,9 +71,28 @@ COLORS = {
 # ========== ГИФКИ ДЛЯ КЛАНОВ ==========
 GIFS = {
     'ally': 'https://cdn.discordapp.com/attachments/1436012207606595774/1480486064723595324/aniyuki-gojo-satoru-gif-23.gif?ex=69afd997&is=69ae8817&hm=d5392f0643225fb1391075e829b488e69db9386b9cfed8479ce4b48ae3cb2220&',
-    'enemy': 'https://media.tenor.com/hp1qKBQclPMAAAPo/jujutsu-kaisen-shibuya-arc-sukuna-domain-expansion.mp4',
+    'enemy': 'https://cdn.discordapp.com/attachments/1436012207606595774/1480496324179787857/jujutsu-kaisen-shibuya-arc-sukuna-domain-expansion.gif?ex=69afe325&is=69ae91a5&hm=cdfb1840b17659a4ddb9e5906c50a0217bd09e18f8b8feece11c20184b1971fc&',
     'peace': 'https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&'
 }
+
+# ========== СПИСКИ СЕРВЕРОВ ==========
+ENEMY_SERVERS = {
+    "Название вражеского сервера 1": 123456789012345678,
+    "Название вражеского сервера 2": 123456789012345679,
+}
+
+ALLY_SERVERS = {
+    "Название союзного сервера 1": 123456789012345680,
+}
+
+NEUTRAL_SERVERS = {
+    "Название нейтрального сервера 1": 123456789012345681,
+}
+
+ALL_TRACKED_SERVERS = {}
+ALL_TRACKED_SERVERS.update(ENEMY_SERVERS)
+ALL_TRACKED_SERVERS.update(ALLY_SERVERS)
+ALL_TRACKED_SERVERS.update(NEUTRAL_SERVERS)
 
 # Настройки ролей для каждого сервера
 GUILD_ROLE_SETTINGS = {}
@@ -196,7 +213,8 @@ class Database:
                     PRIMARY KEY (user_id, guild_id)
                 )
             ''')
-                        # Таблица для хранения данных OAuth2
+            
+            # Таблица для хранения данных OAuth2
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS oauth_data (
                     user_id BIGINT PRIMARY KEY,
@@ -210,33 +228,6 @@ class Database:
             ''')
             
             logger.info("✅ Все таблицы инициализированы")
-
-        
-        async def save_oauth_data(self, user_id: int, username: str, access_token: str, refresh_token: str, expires_in: int, guilds_data: list):
-        """Сохранить данные OAuth2 пользователя"""
-        async with self.pool.acquire() as conn:
-            expires_at = datetime.now() + timedelta(seconds=expires_in)
-            await conn.execute('''
-                INSERT INTO oauth_data (user_id, username, access_token, refresh_token, expires_at, guilds_data)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (user_id) DO UPDATE 
-                SET access_token = EXCLUDED.access_token,
-                    refresh_token = EXCLUDED.refresh_token,
-                    expires_at = EXCLUDED.expires_at,
-                    guilds_data = EXCLUDED.guilds_data,
-                    last_updated = CURRENT_TIMESTAMP
-            ''', user_id, username, access_token, refresh_token, expires_at, str(guilds_data))
-    
-    async def get_oauth_data(self, user_id: int):
-        """Получить данные OAuth2 пользователя"""
-        async with self.pool.acquire() as conn:
-            return await conn.fetchrow('SELECT * FROM oauth_data WHERE user_id = $1', user_id)
-    
-    async def refresh_oauth_token(self, user_id: int, refresh_token: str):
-        """Обновить токен (если нужно)"""
-        # Здесь логика обновления токена через Discord API
-        pass
-
     
     async def get_user_points(self, user_id: int, guild_id: int) -> int:
         async with self.pool.acquire() as conn:
@@ -490,6 +481,28 @@ class Database:
     async def count_manual_enemies(self):
         async with self.pool.acquire() as conn:
             return await conn.fetchval('SELECT COUNT(*) FROM manual_enemies')
+    
+    # ========== МЕТОДЫ ДЛЯ OAuth2 ==========
+    
+    async def save_oauth_data(self, user_id: int, username: str, access_token: str, refresh_token: str, expires_in: int, guilds_data: list):
+        """Сохранить данные OAuth2 пользователя"""
+        async with self.pool.acquire() as conn:
+            expires_at = datetime.now() + timedelta(seconds=expires_in)
+            await conn.execute('''
+                INSERT INTO oauth_data (user_id, username, access_token, refresh_token, expires_at, guilds_data)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (user_id) DO UPDATE 
+                SET access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    expires_at = EXCLUDED.expires_at,
+                    guilds_data = EXCLUDED.guilds_data,
+                    last_updated = CURRENT_TIMESTAMP
+            ''', user_id, username, access_token, refresh_token, expires_at, str(guilds_data))
+    
+    async def get_oauth_data(self, user_id: int):
+        """Получить данные OAuth2 пользователя"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow('SELECT * FROM oauth_data WHERE user_id = $1', user_id)
 
 # ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
 
@@ -667,7 +680,7 @@ def get_guild_settings(guild_id: int):
 db = Database()
 clan_manager = None
 
-# ========== ВЕБ-СЕРВЕР И OAuth2 ==========
+# ========== ВЕБ-СЕРВЕР ==========
 
 async def handle_root(request):
     return web.Response(
@@ -697,8 +710,10 @@ async def handle_health(request):
     
     return web.json_response(status)
 
-# OAuth2 обработчики
+# ========== OAuth2 Обработчики ==========
+
 async def handle_oauth_login(request):
+    """Страница с кнопкой входа через Discord"""
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -739,6 +754,7 @@ async def handle_oauth_login(request):
     return web.Response(text=html, content_type='text/html')
 
 async def handle_oauth_start(request):
+    """Начать OAuth2 авторизацию"""
     state = secrets.token_urlsafe(16)
     oauth_states[state] = {"created_at": datetime.now()}
     
@@ -765,7 +781,6 @@ async def handle_oauth_callback(request):
     del oauth_states[state]
     
     async with aiohttp.ClientSession() as session:
-        # Получаем access token
         data = {
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
@@ -787,15 +802,13 @@ async def handle_oauth_callback(request):
         
         headers = {"Authorization": f"Bearer {access_token}"}
         
-        # Получаем информацию о пользователе
         async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
             user_data = await resp.json()
         
-        # Получаем ВСЕ серверы пользователя
         async with session.get("https://discord.com/api/users/@me/guilds", headers=headers) as resp:
             guilds_data = await resp.json()
         
-        # СОХРАНЯЕМ В БАЗУ ДАННЫХ
+        # Сохраняем в базу данных
         await db.save_oauth_data(
             int(user_data['id']), 
             user_data['username'], 
@@ -807,35 +820,6 @@ async def handle_oauth_callback(request):
     
     return await create_results_page(user_data, guilds_data)
 
-    
-    
-    async with aiohttp.ClientSession() as session:
-        data = {
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-            "grant_type": "authorization_code",
-            "code": code,
-            "redirect_uri": REDIRECT_URI
-        }
-        
-        headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        
-        async with session.post("https://discord.com/api/oauth2/token", data=data, headers=headers) as resp:
-            if resp.status != 200:
-                return web.Response(text="Ошибка получения токена", status=400)
-            token_data = await resp.json()
-        
-        access_token = token_data['access_token']
-        headers = {"Authorization": f"Bearer {access_token}"}
-        
-        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
-            user_data = await resp.json()
-        
-        async with session.get("https://discord.com/api/users/@me/guilds", headers=headers) as resp:
-            guilds_data = await resp.json()
-    
-    return await create_results_page(user_data, guilds_data)
-
 async def create_results_page(user_data, guilds_data):
     """Создать страницу с результатами проверки"""
     enemy_servers = []
@@ -843,7 +827,7 @@ async def create_results_page(user_data, guilds_data):
     neutral_servers = []
     other_servers = []
     
-    # Сортируем серверы по названию для удобства
+    # Сортируем серверы по названию
     sorted_guilds = sorted(guilds_data, key=lambda x: x['name'].lower())
     
     for guild in sorted_guilds:
@@ -858,17 +842,24 @@ async def create_results_page(user_data, guilds_data):
         
         guild_id = int(guild['id'])
         
-        # Здесь нужно будет подключить ваши словари ENEMY_SERVERS и т.д.
-        # Пока просто разделяем по ключевым словам
-        name_lower = guild['name'].lower()
-        if 'enemy' in name_lower or 'враг' in name_lower or 'raid' in name_lower:
+        # Проверяем по ID сервера (используем ENEMY_SERVERS и т.д.)
+        if guild_id in ENEMY_SERVERS.values():
             enemy_servers.append(guild_info)
-        elif 'ally' in name_lower or 'союз' in name_lower or 'friend' in name_lower:
+        elif guild_id in ALLY_SERVERS.values():
             ally_servers.append(guild_info)
-        elif 'peace' in name_lower or 'нейтр' in name_lower or 'neutral' in name_lower:
+        elif guild_id in NEUTRAL_SERVERS.values():
             neutral_servers.append(guild_info)
         else:
-            other_servers.append(guild_info)
+            # Если не нашли по ID, проверяем по названию
+            name_lower = guild['name'].lower()
+            if 'enemy' in name_lower or 'враг' in name_lower or 'raid' in name_lower:
+                enemy_servers.append(guild_info)
+            elif 'ally' in name_lower or 'союз' in name_lower or 'friend' in name_lower:
+                ally_servers.append(guild_info)
+            elif 'peace' in name_lower or 'нейтр' in name_lower or 'neutral' in name_lower:
+                neutral_servers.append(guild_info)
+            else:
+                other_servers.append(guild_info)
     
     # Сортируем каждую категорию
     enemy_servers.sort(key=lambda x: x['name'])
@@ -876,7 +867,7 @@ async def create_results_page(user_data, guilds_data):
     neutral_servers.sort(key=lambda x: x['name'])
     other_servers.sort(key=lambda x: x['name'])
     
-    # Создаем HTML с прокруткой для всех серверов
+    # Создаем HTML
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -1085,7 +1076,6 @@ async def create_results_page(user_data, guilds_data):
         </div>
         
         <script>
-            // Поиск серверов
             function filterServers() {
                 const input = document.getElementById('searchInput');
                 const filter = input.value.toLowerCase();
@@ -1105,12 +1095,11 @@ async def create_results_page(user_data, guilds_data):
                         }
                     });
                     
-                    // Показываем/скрываем заголовок секции если нет видимых элементов
                     const section = container.closest('.server-section');
                     if (section) {
                         const title = section.querySelector('.section-title h3');
                         if (title) {
-                            const match = title.innerHTML.match(/\d+/);
+                            const match = title.innerHTML.match(/\\d+/);
                             if (match) {
                                 title.innerHTML = title.innerHTML.replace(match[0], visibleCount);
                             }
@@ -1119,7 +1108,6 @@ async def create_results_page(user_data, guilds_data):
                 });
             }
             
-            // Сворачивание/разворачивание секций
             function toggleSection(sectionClass) {
                 const grid = document.getElementById('section-' + sectionClass);
                 const toggle = document.getElementById('toggle-' + sectionClass);
@@ -1133,7 +1121,6 @@ async def create_results_page(user_data, guilds_data):
                 }
             }
             
-            // Добавляем класс hidden в CSS
             const style = document.createElement('style');
             style.innerHTML = '.hidden { display: none !important; }';
             document.head.appendChild(style);
@@ -1444,6 +1431,10 @@ async def on_ready():
     
     await start_web_server()
     
+    # Запускаем проверку истекших голосований
+    bot.loop.create_task(check_expired_vouches())
+    logger.info("✅ Запущена проверка истекших голосований")
+    
     activity_text = f"{PREFIX}help | {len(bot.guilds)} серв."
     await bot.change_presence(
         activity=discord.Activity(
@@ -1651,17 +1642,51 @@ async def all_clans(ctx):
     
     await safe_send(ctx, embed=embed)
 
-# ========== OAuth2 КОМАНДА ==========
+@bot.command(name='setclangif')
+@is_admin()
+async def set_clan_gif(ctx, clan_type: str, gif_url: str):
+    """
+    Установить гифку для типа клана
+    
+    Типы: ally, enemy, peace
+    
+    Пример:
+    !setclangif ally https://ссылка_на_гифку.gif
+    """
+    valid_types = ['ally', 'enemy', 'peace']
+    
+    if clan_type.lower() not in valid_types:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Доступные типы: {', '.join(valid_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    GIFS[clan_type.lower()] = gif_url
+    
+    embed = discord.Embed(
+        title="✅ Гифка обновлена",
+        description=f"Для типа **{clan_type}** установлена новая гифка",
+        color=COLORS['success']
+    )
+    embed.set_image(url=gif_url)
+    
+    await safe_send(ctx, embed=embed)
+
+# ========== OAuth2 КОМАНДЫ ==========
 
 @bot.command(name='oauth')
 async def oauth_command(ctx):
+    """Получить ссылку для OAuth2 проверки всех серверов пользователя"""
     embed = discord.Embed(
         title="🔍 OAuth2 Проверка серверов",
         description="Перейдите по ссылке ниже, чтобы проверить ВСЕ серверы, где состоит пользователь (даже те, где нет бота)",
         color=COLORS['info']
     )
     
-    oauth_url = f"https://husseinbot2.onrender.com/oauth2/login"
+    oauth_url = f"https://ваш-бот.onrender.com/oauth2/login"
     
     embed.add_field(
         name="📋 Инструкция",
@@ -1675,6 +1700,141 @@ async def oauth_command(ctx):
     embed.set_footer(text="Внимание: сайт запросит доступ к списку ваших серверов")
     
     await safe_send(ctx, embed=embed)
+
+@bot.command(name='checkoauth')
+@is_admin()
+async def check_oauth_user(ctx, user: discord.User):
+    """
+    Проверить данные OAuth2 пользователя (если он авторизовался)
+    
+    Пример: !checkoauth @user
+    """
+    data = await db.get_oauth_data(user.id)
+    
+    if not data:
+        embed = discord.Embed(
+            title="❌ Данные не найдены",
+            description=f"Пользователь {user.mention} еще не авторизовался через OAuth2",
+            color=COLORS['error']
+        )
+        embed.add_field(
+            name="📋 Инструкция",
+            value=f"Попросите пользователя перейти по ссылке `{PREFIX}oauth` и авторизоваться",
+            inline=False
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Парсим сохраненные данные о серверах
+    try:
+        guilds_data = eval(data['guilds_data'])
+    except:
+        guilds_data = []
+    
+    # Анализируем серверы
+    enemy_servers = []
+    ally_servers = []
+    neutral_servers = []
+    other_servers = []
+    
+    for guild in guilds_data:
+        guild_id = int(guild['id'])
+        
+        if guild_id in ENEMY_SERVERS.values():
+            enemy_servers.append(guild)
+        elif guild_id in ALLY_SERVERS.values():
+            ally_servers.append(guild)
+        elif guild_id in NEUTRAL_SERVERS.values():
+            neutral_servers.append(guild)
+        else:
+            name_lower = guild['name'].lower()
+            if 'enemy' in name_lower or 'враг' in name_lower:
+                enemy_servers.append(guild)
+            elif 'ally' in name_lower or 'союз' in name_lower:
+                ally_servers.append(guild)
+            elif 'peace' in name_lower or 'нейтр' in name_lower:
+                neutral_servers.append(guild)
+            else:
+                other_servers.append(guild)
+    
+    embed = discord.Embed(
+        title=f"🔍 OAuth2 данные {user.display_name}",
+        description=f"Последнее обновление: {data['last_updated'].strftime('%d.%m.%Y %H:%M')}",
+        color=COLORS['info']
+    )
+    
+    embed.add_field(
+        name="📊 Статистика",
+        value=f"Всего серверов: **{len(guilds_data)}**",
+        inline=False
+    )
+    
+    if enemy_servers:
+        enemy_text = "\n".join([f"• **{g['name']}**" for g in enemy_servers[:5]])
+        if len(enemy_servers) > 5:
+            enemy_text += f"\n*... и ещё {len(enemy_servers) - 5}*"
+        embed.add_field(
+            name=f"⚠️ ВРАЖЕСКИЕ СЕРВЕРЫ ({len(enemy_servers)})",
+            value=enemy_text,
+            inline=False
+        )
+    
+    if ally_servers:
+        ally_text = "\n".join([f"• **{g['name']}**" for g in ally_servers[:5]])
+        if len(ally_servers) > 5:
+            ally_text += f"\n*... и ещё {len(ally_servers) - 5}*"
+        embed.add_field(
+            name=f"🤝 СОЮЗНЫЕ СЕРВЕРЫ ({len(ally_servers)})",
+            value=ally_text,
+            inline=False
+        )
+    
+    if neutral_servers:
+        neutral_text = "\n".join([f"• **{g['name']}**" for g in neutral_servers[:5]])
+        if len(neutral_servers) > 5:
+            neutral_text += f"\n*... и ещё {len(neutral_servers) - 5}*"
+        embed.add_field(
+            name=f"🕊️ НЕЙТРАЛЬНЫЕ СЕРВЕРЫ ({len(neutral_servers)})",
+            value=neutral_text,
+            inline=False
+        )
+    
+    if other_servers:
+        embed.add_field(
+            name=f"📌 ДРУГИЕ СЕРВЕРЫ",
+            value=f"Находится на **{len(other_servers)}** других серверах",
+            inline=False
+        )
+    
+    embed.set_footer(text="Для полного списка используйте OAuth2 ссылку")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='refreshoauth')
+async def refresh_oauth_data(ctx):
+    """
+    Обновить свои OAuth2 данные (если уже авторизовались)
+    """
+    data = await db.get_oauth_data(ctx.author.id)
+    
+    if not data:
+        embed = discord.Embed(
+            title="❌ Данные не найдены",
+            description=f"Сначала авторизуйтесь через `{PREFIX}oauth`",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="⏳ Обновление данных",
+        description="Перенаправляю на Discord для обновления токена...",
+        color=COLORS['info']
+    )
+    await safe_send(ctx, embed=embed)
+    
+    oauth_url = f"https://ваш-бот.onrender.com/oauth2/login"
+    await ctx.send(f"🔗 Перейдите по ссылке для обновления: {oauth_url}")
 
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
 
@@ -2183,6 +2343,8 @@ async def list_channels(ctx):
     embed.set_footer(text=f"Всего каналов: {count}")
     
     await safe_send(ctx, embed=embed)
+
+# ========== КОМАНДЫ ДЛЯ БЛОКИРОВКИ КАНАЛОВ ==========
 
 @bot.command(name='lockchannels')
 @is_admin()
@@ -4179,29 +4341,24 @@ async def reload_roles_from_db(ctx):
         )
         await safe_send(ctx, embed=embed)
 
-
 # ========== СИСТЕМА ВОУЧЕЙ (ГОЛОСОВАНИЯ) ==========
 
 class VouchView(discord.ui.View):
-    """Класс для отображения кнопок голосования"""
-    
     def __init__(self, target_user: discord.Member, target_role: discord.Role, initiator: discord.Member):
-        super().__init__(timeout=7200)  # 2 часа на голосование
+        super().__init__(timeout=7200)
         self.target_user = target_user
         self.target_role = target_role
         self.initiator = initiator
-        self.votes_for = set()  # Множество ID пользователей, проголосовавших ЗА
-        self.votes_against = set()  # Множество ID пользователей, проголосовавших ПРОТИВ
-        self.message = None  # Сообщение с голосованием
-        self.is_completed = False  # Флаг завершения голосования
+        self.votes_for = set()
+        self.votes_against = set()
+        self.message = None
+        self.is_completed = False
         
-        # Добавляем кнопки
         self.add_item(VouchForButton())
         self.add_item(VouchAgainstButton())
         self.add_item(VouchShowVotesButton())
     
     async def update_embed(self):
-        """Обновить embed с текущей статистикой голосования"""
         embed = discord.Embed(
             title=f"🗳️ Голосование за повышение {self.target_user.display_name}",
             description=f"**Предложил:** {self.initiator.mention}\n"
@@ -4228,7 +4385,6 @@ class VouchView(discord.ui.View):
             inline=True
         )
         
-        # Прогресс-бар
         total_votes = len(self.votes_for) + len(self.votes_against)
         if total_votes > 0:
             for_percent = (len(self.votes_for) / total_votes) * 100
@@ -4241,8 +4397,7 @@ class VouchView(discord.ui.View):
                 inline=False
             )
         
-        # Добавляем информацию о необходимом условии
-        if len(self.votes_for) >= 5:  # Условие: минимум 5 голосов ЗА
+        if len(self.votes_for) >= 5:
             embed.add_field(
                 name="✅ Условие выполнено",
                 value="Набрано 5+ голосов ЗА! Администратор может выдать роль.",
@@ -4261,10 +4416,7 @@ class VouchView(discord.ui.View):
             await self.message.edit(embed=embed, view=self)
     
     async def check_votes(self):
-        """Проверить количество голосов"""
-        # Если набрано 5+ голосов ЗА, автоматически добавляем кнопку для админа
         if len(self.votes_for) >= 5 and not self.is_completed:
-            # Проверяем, нет ли уже кнопки выдачи
             has_give_button = False
             for item in self.children:
                 if isinstance(item, VouchGiveRoleButton):
@@ -4275,9 +4427,7 @@ class VouchView(discord.ui.View):
                 self.add_item(VouchGiveRoleButton())
                 await self.update_embed()
                 
-                # Отправляем уведомление админам
                 if self.message and self.message.guild:
-                    # Пингуем админские роли
                     admin_mentions = []
                     for role_id in ADMIN_ROLE_IDS:
                         role = self.message.guild.get_role(role_id)
@@ -4290,17 +4440,13 @@ class VouchView(discord.ui.View):
                             delete_after=10
                         )
 
-
 class VouchForButton(discord.ui.Button):
-    """Кнопка для голосования ЗА"""
-    
     def __init__(self):
         super().__init__(style=discord.ButtonStyle.success, label="ЗА", emoji="✅", row=0)
     
     async def callback(self, interaction: discord.Interaction):
         view: VouchView = self.view
         
-        # ПРОВЕРКА: Нельзя голосовать за самого себя
         if interaction.user.id == view.target_user.id:
             await interaction.response.send_message("❌ Вы не можете голосовать за самого себя!", ephemeral=True)
             return
@@ -4309,12 +4455,10 @@ class VouchForButton(discord.ui.Button):
             await interaction.response.send_message("❌ Голосование уже завершено!", ephemeral=True)
             return
         
-        # Проверяем, не голосовал ли уже пользователь
         if interaction.user.id in view.votes_for:
             await interaction.response.send_message("❌ Вы уже проголосовали ЗА!", ephemeral=True)
             return
         if interaction.user.id in view.votes_against:
-            # Перемещаем голос из ПРОТИВ в ЗА
             view.votes_against.remove(interaction.user.id)
             view.votes_for.add(interaction.user.id)
             await interaction.response.send_message("✅ Ваш голос изменен на ЗА!", ephemeral=True)
@@ -4325,17 +4469,13 @@ class VouchForButton(discord.ui.Button):
         await view.update_embed()
         await view.check_votes()
 
-
 class VouchAgainstButton(discord.ui.Button):
-    """Кнопка для голосования ПРОТИВ"""
-    
     def __init__(self):
         super().__init__(style=discord.ButtonStyle.danger, label="ПРОТИВ", emoji="❌", row=0)
     
     async def callback(self, interaction: discord.Interaction):
         view: VouchView = self.view
         
-        # ПРОВЕРКА: Нельзя голосовать за самого себя
         if interaction.user.id == view.target_user.id:
             await interaction.response.send_message("❌ Вы не можете голосовать за самого себя!", ephemeral=True)
             return
@@ -4344,12 +4484,10 @@ class VouchAgainstButton(discord.ui.Button):
             await interaction.response.send_message("❌ Голосование уже завершено!", ephemeral=True)
             return
         
-        # Проверяем, не голосовал ли уже пользователь
         if interaction.user.id in view.votes_against:
             await interaction.response.send_message("❌ Вы уже проголосовали ПРОТИВ!", ephemeral=True)
             return
         if interaction.user.id in view.votes_for:
-            # Перемещаем голос из ЗА в ПРОТИВ
             view.votes_for.remove(interaction.user.id)
             view.votes_against.add(interaction.user.id)
             await interaction.response.send_message("✅ Ваш голос изменен на ПРОТИВ!", ephemeral=True)
@@ -4360,10 +4498,7 @@ class VouchAgainstButton(discord.ui.Button):
         await view.update_embed()
         await view.check_votes()
 
-
 class VouchShowVotesButton(discord.ui.Button):
-    """Кнопка для показа списка проголосовавших"""
-    
     def __init__(self):
         super().__init__(style=discord.ButtonStyle.secondary, label="Кто проголосовал", emoji="📋", row=1)
     
@@ -4375,10 +4510,9 @@ class VouchShowVotesButton(discord.ui.Button):
             color=discord.Color.blue()
         )
         
-        # Формируем список ЗА
         if view.votes_for:
             for_voters = []
-            for user_id in list(view.votes_for)[:20]:  # Показываем первые 20
+            for user_id in list(view.votes_for)[:20]:
                 user = interaction.guild.get_member(user_id)
                 if user:
                     for_voters.append(f"• {user.mention}")
@@ -4393,10 +4527,9 @@ class VouchShowVotesButton(discord.ui.Button):
         else:
             embed.add_field(name="✅ ЗА", value="Нет голосов", inline=False)
         
-        # Формируем список ПРОТИВ
         if view.votes_against:
             against_voters = []
-            for user_id in list(view.votes_against)[:20]:  # Показываем первые 20
+            for user_id in list(view.votes_against)[:20]:
                 user = interaction.guild.get_member(user_id)
                 if user:
                     against_voters.append(f"• {user.mention}")
@@ -4411,27 +4544,19 @@ class VouchShowVotesButton(discord.ui.Button):
         else:
             embed.add_field(name="❌ ПРОТИВ", value="Нет голосов", inline=False)
         
-        # Добавляем информацию о том, что голосующий не может голосовать за себя
         embed.set_footer(text=f"Всего проголосовало: {len(view.votes_for) + len(view.votes_against)} | Нельзя голосовать за себя")
         
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-
-
-
 class VouchGiveRoleButton(discord.ui.Button):
-    """Кнопка для выдачи роли (только для админов)"""
-    
     def __init__(self):
         super().__init__(style=discord.ButtonStyle.primary, label="ВЫДАТЬ РОЛЬ", emoji="🎁", row=1)
     
     async def callback(self, interaction: discord.Interaction):
         view: VouchView = self.view
         
-        # Проверяем, является ли пользователь админом
         is_admin = interaction.user.guild_permissions.administrator
         if not is_admin:
-            # Проверяем кастомные админские роли
             user_role_ids = [role.id for role in interaction.user.roles]
             is_admin = any(admin_role_id in user_role_ids for admin_role_id in ADMIN_ROLE_IDS)
         
@@ -4443,18 +4568,15 @@ class VouchGiveRoleButton(discord.ui.Button):
             await interaction.response.send_message("❌ Голосование уже завершено!", ephemeral=True)
             return
         
-        # Проверяем условие (5+ голосов ЗА)
         if len(view.votes_for) < 5:
             await interaction.response.send_message(f"❌ Недостаточно голосов! Нужно минимум 5 голосов ЗА (сейчас {len(view.votes_for)})", ephemeral=True)
             return
         
-        # Выдаем роль
         try:
             await view.target_user.add_roles(view.target_role, reason=f"Повышение по результатам голосования (админ: {interaction.user})")
             
             view.is_completed = True
             
-            # Создаем embed с результатом
             embed = discord.Embed(
                 title="✅ РОЛЬ ВЫДАНА",
                 description=f"**{view.target_user.mention} повышен до {view.target_role.mention}!**",
@@ -4476,7 +4598,6 @@ class VouchGiveRoleButton(discord.ui.Button):
             
             embed.set_footer(text=f"Голосование инициировано: {view.initiator.display_name}")
             
-            # Отключаем все кнопки
             for item in view.children:
                 item.disabled = True
             
@@ -4484,7 +4605,6 @@ class VouchGiveRoleButton(discord.ui.Button):
             
             await interaction.response.send_message(f"✅ Роль {view.target_role.mention} успешно выдана пользователю {view.target_user.mention}!", ephemeral=True)
             
-            # Отправляем уведомление в ЛС пользователю
             try:
                 dm_embed = discord.Embed(
                     title="🎉 Вас повысили!",
@@ -4493,28 +4613,17 @@ class VouchGiveRoleButton(discord.ui.Button):
                 )
                 await view.target_user.send(embed=dm_embed)
             except:
-                pass  # Игнорируем ошибки отправки в ЛС
+                pass
                 
         except Exception as e:
             logger.error(f"Ошибка при выдаче роли: {e}")
             await interaction.response.send_message(f"❌ Ошибка при выдаче роли: {str(e)[:100]}", ephemeral=True)
 
-
-# Хранилище активных голосований
-active_vouches = {}  # {channel_id: view}
-
+active_vouches = {}
 
 @bot.command(name='vouch')
 @is_admin()
 async def vouch_command(ctx, member: discord.Member, role: discord.Role):
-    """
-    Создать голосование за повышение пользователя
-    
-    Примеры:
-    !vouch @User @Роль
-    !vouch @Игрок @Raider
-    """
-    # Проверка: инициатор не может создавать голосование за себя
     if member.id == ctx.author.id:
         embed = discord.Embed(
             title="❌ Ошибка",
@@ -4524,7 +4633,6 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         await safe_send(ctx, embed=embed)
         return
     
-    # Проверяем, что роль существует на сервере
     if role not in ctx.guild.roles:
         embed = discord.Embed(
             title="❌ Ошибка",
@@ -4534,7 +4642,6 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         await safe_send(ctx, embed=embed)
         return
     
-    # Проверяем, что пользователь не является ботом
     if member.bot:
         embed = discord.Embed(
             title="❌ Ошибка",
@@ -4544,7 +4651,6 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         await safe_send(ctx, embed=embed)
         return
     
-    # Проверяем, что пользователь не админ (опционально)
     if member.guild_permissions.administrator:
         embed = discord.Embed(
             title="⚠️ Предупреждение",
@@ -4553,7 +4659,6 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         )
         await safe_send(ctx, embed=embed)
     
-    # Проверяем, нет ли уже активного голосования в этом канале
     if ctx.channel.id in active_vouches:
         embed = discord.Embed(
             title="❌ Ошибка",
@@ -4563,9 +4668,8 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         await safe_send(ctx, embed=embed)
         return
     
-    # Создаем embed для голосования
     embed = discord.Embed(
-        title=f"🗳️ Голосование за повышение {member.displayName}",
+        title=f"🗳️ Голосование за повышение {member.display_name}",
         description=f"**Предложил:** {ctx.author.mention}\n"
                    f"**Пользователь:** {member.mention}\n"
                    f"**Роль:** {role.mention}\n\n"
@@ -4605,31 +4709,21 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
     
     embed.set_footer(text=f"Голосование создано: {datetime.now().strftime('%d.%m.%Y %H:%M')} | Нельзя голосовать за себя")
     
-    # Создаем view с кнопками
     view = VouchView(member, role, ctx.author)
     
-    # Отправляем сообщение
     message = await safe_send(ctx, embed=embed, view=view)
     if message:
         view.message = message
         active_vouches[ctx.channel.id] = view
         
-        # Отправляем дополнительное сообщение с пингом (опционально)
         await ctx.send(f"@everyone Начато голосование за повышение {member.mention} до роли {role.mention}!",
                       delete_after=5)
         
-        # Логируем создание голосования
         logger.info(f"Создано голосование за {member} до роли {role} пользователем {ctx.author}")
-
-
-
 
 @bot.command(name='endvouch')
 @is_admin()
 async def end_vouch_command(ctx):
-    """
-    Принудительно завершить активное голосование в текущем канале
-    """
     if ctx.channel.id not in active_vouches:
         embed = discord.Embed(
             title="❌ Ошибка",
@@ -4641,7 +4735,6 @@ async def end_vouch_command(ctx):
     
     view = active_vouches[ctx.channel.id]
     
-    # Запрашиваем подтверждение
     embed = discord.Embed(
         title="⚠️ Подтверждение",
         description="Вы уверены, что хотите принудительно завершить голосование?",
@@ -4657,11 +4750,9 @@ async def end_vouch_command(ctx):
         
         view.is_completed = True
         
-        # Отключаем все кнопки
         for item in view.children:
             item.disabled = True
         
-        # Обновляем embed
         embed_result = discord.Embed(
             title="🗳️ Голосование завершено",
             description=f"Голосование за {view.target_user.mention} было принудительно завершено.",
@@ -4683,7 +4774,6 @@ async def end_vouch_command(ctx):
         
         await view.message.edit(embed=embed_result, view=view)
         
-        # Удаляем из активных голосований
         del active_vouches[ctx.channel.id]
         
         await interaction.response.edit_message(content="✅ Голосование завершено!", embed=None, view=None)
@@ -4706,12 +4796,8 @@ async def end_vouch_command(ctx):
     
     await safe_send(ctx, embed=embed, view=view_confirm)
 
-
 @bot.command(name='vouchinfo')
 async def vouch_info_command(ctx):
-    """
-    Показать информацию об активном голосовании в текущем канале
-    """
     if ctx.channel.id not in active_vouches:
         embed = discord.Embed(
             title="ℹ️ Информация",
@@ -4736,7 +4822,6 @@ async def vouch_info_command(ctx):
     embed.add_field(name="❌ ПРОТИВ", value=str(len(view.votes_against)), inline=True)
     embed.add_field(name="📊 Всего", value=str(len(view.votes_for) + len(view.votes_against)), inline=True)
     
-    # Проверяем, есть ли кнопка выдачи
     has_give_button = False
     for item in view.children:
         if isinstance(item, VouchGiveRoleButton):
@@ -4758,10 +4843,7 @@ async def vouch_info_command(ctx):
     
     await safe_send(ctx, embed=embed)
 
-
-# Добавляем обработчик timeout для очистки завершенных голосований
 async def check_expired_vouches():
-    """Периодическая проверка истекших голосований"""
     await bot.wait_until_ready()
     
     while not bot.is_closed():
@@ -4770,16 +4852,13 @@ async def check_expired_vouches():
             expired_channels = []
             
             for channel_id, view in list(active_vouches.items()):
-                # Проверяем, не истекло ли время (2 часа)
                 if view.message and (current_time - view.message.created_at.timestamp()) > 7200:
                     if not view.is_completed:
                         view.is_completed = True
                         
-                        # Отключаем кнопки
                         for item in view.children:
                             item.disabled = True
                         
-                        # Обновляем embed
                         embed = discord.Embed(
                             title="⏰ Время истекло",
                             description=f"Голосование за {view.target_user.mention} автоматически завершено по истечении времени.",
@@ -4800,7 +4879,6 @@ async def check_expired_vouches():
                     
                     expired_channels.append(channel_id)
             
-            # Удаляем истекшие голосования из активных
             for channel_id in expired_channels:
                 if channel_id in active_vouches:
                     del active_vouches[channel_id]
@@ -4808,178 +4886,7 @@ async def check_expired_vouches():
         except Exception as e:
             logger.error(f"Ошибка в проверке истекших голосований: {e}")
         
-        await asyncio.sleep(60)  # Проверяем каждую минуту
-
-
-@bot.command(name='setclangif')
-@is_admin()
-async def set_clan_gif(ctx, clan_type: str, gif_url: str):
-    """
-    Установить гифку для типа клана
-    
-    Типы: ally, enemy, peace
-    
-    Пример:
-    !setclangif ally https://ссылка_на_гифку.gif
-    """
-    valid_types = ['ally', 'enemy', 'peace']
-    
-    if clan_type.lower() not in valid_types:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Доступные типы: {', '.join(valid_types)}",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Сохраняем новую гифку
-    GIFS[clan_type.lower()] = gif_url
-    
-    embed = discord.Embed(
-        title="✅ Гифка обновлена",
-        description=f"Для типа **{clan_type}** установлена новая гифка",
-        color=COLORS['success']
-    )
-    embed.set_image(url=gif_url)
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='checkoauth')
-@is_admin()
-async def check_oauth_user(ctx, user: discord.User):
-    """
-    Проверить данные OAuth2 пользователя (если он авторизовался)
-    
-    Пример: !checkoauth @user
-    """
-    # Получаем данные из БД
-    data = await db.get_oauth_data(user.id)
-    
-    if not data:
-        embed = discord.Embed(
-            title="❌ Данные не найдены",
-            description=f"Пользователь {user.mention} еще не авторизовался через OAuth2",
-            color=COLORS['error']
-        )
-        embed.add_field(
-            name="📋 Инструкция",
-            value=f"Попросите пользователя перейти по ссылке `{PREFIX}oauth` и авторизоваться",
-            inline=False
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Парсим сохраненные данные о серверах
-    import json
-    try:
-        guilds_data = eval(data['guilds_data'])  # Преобразуем строку обратно в список
-    except:
-        guilds_data = []
-    
-    # Анализируем серверы (как в OAuth2 странице)
-    enemy_servers = []
-    ally_servers = []
-    neutral_servers = []
-    other_servers = []
-    
-    for guild in guilds_data:
-        name_lower = guild['name'].lower()
-        if 'enemy' in name_lower or 'враг' in name_lower:
-            enemy_servers.append(guild)
-        elif 'ally' in name_lower or 'союз' in name_lower:
-            ally_servers.append(guild)
-        elif 'peace' in name_lower or 'нейтр' in name_lower:
-            neutral_servers.append(guild)
-        else:
-            other_servers.append(guild)
-    
-    # Создаем embed с результатами
-    embed = discord.Embed(
-        title=f"🔍 OAuth2 данные {user.display_name}",
-        description=f"Последнее обновление: {data['last_updated'].strftime('%d.%m.%Y %H:%M')}",
-        color=COLORS['info']
-    )
-    
-    # Общая статистика
-    embed.add_field(
-        name="📊 Статистика",
-        value=f"Всего серверов: **{len(guilds_data)}**",
-        inline=False
-    )
-    
-    # Вражеские серверы
-    if enemy_servers:
-        enemy_text = "\n".join([f"• **{g['name']}**" for g in enemy_servers[:5]])
-        if len(enemy_servers) > 5:
-            enemy_text += f"\n*... и ещё {len(enemy_servers) - 5}*"
-        embed.add_field(
-            name=f"⚠️ ВРАЖЕСКИЕ СЕРВЕРЫ ({len(enemy_servers)})",
-            value=enemy_text,
-            inline=False
-        )
-    
-    # Союзные серверы
-    if ally_servers:
-        ally_text = "\n".join([f"• **{g['name']}**" for g in ally_servers[:5]])
-        if len(ally_servers) > 5:
-            ally_text += f"\n*... и ещё {len(ally_servers) - 5}*"
-        embed.add_field(
-            name=f"🤝 СОЮЗНЫЕ СЕРВЕРЫ ({len(ally_servers)})",
-            value=ally_text,
-            inline=False
-        )
-    
-    # Нейтральные серверы
-    if neutral_servers:
-        neutral_text = "\n".join([f"• **{g['name']}**" for g in neutral_servers[:5]])
-        if len(neutral_servers) > 5:
-            neutral_text += f"\n*... и ещё {len(neutral_servers) - 5}*"
-        embed.add_field(
-            name=f"🕊️ НЕЙТРАЛЬНЫЕ СЕРВЕРЫ ({len(neutral_servers)})",
-            value=neutral_text,
-            inline=False
-        )
-    
-    # Другие серверы
-    if other_servers:
-        embed.add_field(
-            name=f"📌 ДРУГИЕ СЕРВЕРЫ",
-            value=f"Находится на **{len(other_servers)}** других серверах",
-            inline=False
-        )
-    
-    embed.set_footer(text="Для полного списка используйте OAuth2 ссылку")
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='refreshoauth')
-async def refresh_oauth_data(ctx):
-    """
-    Обновить свои OAuth2 данные (если уже авторизовались)
-    """
-    data = await db.get_oauth_data(ctx.author.id)
-    
-    if not data:
-        embed = discord.Embed(
-            title="❌ Данные не найдены",
-            description=f"Сначала авторизуйтесь через `{PREFIX}oauth`",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="⏳ Обновление данных",
-        description="Перенаправляю на Discord для обновления токена...",
-        color=COLORS['info']
-    )
-    await safe_send(ctx, embed=embed)
-    
-    # Перенаправляем на OAuth2 заново
-    oauth_url = f"https://ваш-бот.onrender.com/oauth2/login"
-    await ctx.send(f"🔗 Перейдите по ссылке для обновления: {oauth_url}")
-
+        await asyncio.sleep(60)
 
 # ========== КОМАНДА HELP ==========
 
@@ -5089,6 +4996,7 @@ async def help_command(ctx):
                   f"```{PREFIX}removeclan \"название\"``` - Удалить из всех категорий\n"
                   f"```{PREFIX}editclan ally \"название\" tag NEWTAG``` - Изменить тег клана\n"
                   f"```{PREFIX}editclan ally \"название\" desc \"новое описание\"``` - Изменить описание\n"
+                  f"```{PREFIX}setclangif ally ссылка``` - Установить гифку для союзников\n"
                   f"```{PREFIX}clearclans``` - Удалить ВСЕ кланы на сервере",
             inline=False
         )
@@ -5096,13 +5004,22 @@ async def help_command(ctx):
         embed.add_field(
             name="🔍 **OAuth2 проверка серверов**",
             value=f"```{PREFIX}oauth``` - Получить ссылку для проверки ВСЕХ серверов пользователя\n"
-                  f"(даже тех, где нет бота!)",
+                  f"```{PREFIX}checkoauth @user``` - Проверить сохраненные OAuth2 данные пользователя\n"
+                  f"```{PREFIX}refreshoauth``` - Обновить свои OAuth2 данные",
             inline=False
         )
         
         embed.add_field(
             name="📊 **Экспорт данных (Админ)**",
             value=f"```{PREFIX}export``` - Экспортировать все данные о поинтах в CSV файл",
+            inline=False
+        )
+        
+        embed.add_field(
+            name="🗳️ **Система голосования (Vouch)**",
+            value=f"```{PREFIX}vouch @пользователь @роль``` - Создать голосование за повышение\n"
+                  f"```{PREFIX}endvouch``` - Принудительно завершить голосование\n"
+                  f"```{PREFIX}vouchinfo``` - Информация об активном голосовании",
             inline=False
         )
         
@@ -5174,7 +5091,7 @@ async def help_command(ctx):
     embed.add_field(
         name="🔗 **Полезные ссылки**",
         value=f"• [Поддержка](https://t.me/Agentgnd)\n"
-              f"• Версия бота: v2.0 (с OAuth2 и гифками)",
+              f"• Версия бота: v2.0 (с OAuth2, гифками и воучами)",
         inline=False
     )
 
