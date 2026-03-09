@@ -57,6 +57,14 @@ COLORS = {
     'points': discord.Color.gold(),
     'admin': discord.Color.purple()
 }
+# ========== ГИФКИ ДЛЯ КЛАНОВ ==========
+
+GIFS = {
+    'ally': 'https://cdn.discordapp.com/attachments/1436012207606595774/1480486064723595324/aniyuki-gojo-satoru-gif-23.gif?ex=69afd997&is=69ae8817&hm=d5392f0643225fb1391075e829b488e69db9386b9cfed8479ce4b48ae3cb2220&',
+    'enemy': 'https://media.tenor.com/hp1qKBQclPMAAAPo/jujutsu-kaisen-shibuya-arc-sukuna-domain-expansion.mp4',
+    'peace': 'https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&'
+}
+
 
 # Настройки ролей для каждого сервера (guild_id: {points: role_name})
 GUILD_ROLE_SETTINGS = {}
@@ -3328,6 +3336,8 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
             description=f"❌ В этой категории пока нет кланов.\nДобавьте с помощью `!addclan {clan_type} \"название\"`",
             color=COLORS['info']
         )
+        # Добавляем соответствующую гифку
+        embed.set_image(url=GIFS.get(clan_type, GIFS['peace']))
         await safe_send(ctx, embed=embed)
         return
     
@@ -3335,6 +3345,9 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
         title=title,
         color=COLORS['info']
     )
+    
+    # Добавляем соответствующую гифку в начало
+    embed.set_image(url=GIFS.get(clan_type, GIFS['peace']))
     
     for clan in clans:
         # Формируем название с тегом
@@ -3364,6 +3377,8 @@ async def show_clans_by_type(ctx, clan_type: str, title: str):
     
     await safe_send(ctx, embed=embed)
 
+
+
 @bot.command(name='allclans')
 async def all_clans(ctx):
     """Показать все кланы (союзники, враги, нейтральные)"""
@@ -3384,6 +3399,8 @@ async def all_clans(ctx):
             description="Добавьте кланы с помощью команды `!addclan`",
             color=COLORS['info']
         )
+        # Добавляем нейтральную гифку
+        embed.set_image(url=GIFS['peace'])
         await safe_send(ctx, embed=embed)
         return
     
@@ -3392,6 +3409,9 @@ async def all_clans(ctx):
         description=f"Всего кланов: **{len(clans)}**",
         color=COLORS['info']
     )
+    
+    # Добавляем нейтральную гифку для общего списка
+    embed.set_image(url=GIFS['peace'])
     
     # Группируем по типам
     ally_clans_list = [c for c in clans if c['clan_type'] == 'ally']
@@ -3466,6 +3486,8 @@ async def all_clans(ctx):
     embed.set_footer(text="Для добавления кланов используйте !addclan")
     
     await safe_send(ctx, embed=embed)
+
+
 
 @bot.command(name='claninfo')
 async def clan_info(ctx, clan_type: str, *, name: str):
@@ -3727,6 +3749,43 @@ async def search_clan(ctx, *, search_term: str):
             )
     
     await safe_send(ctx, embed=embed)
+
+
+@bot.command(name='setclangif')
+@is_admin()
+async def set_clan_gif(ctx, clan_type: str, gif_url: str):
+    """
+    Установить гифку для типа клана
+    
+    Типы: ally, enemy, peace
+    
+    Пример:
+    !setclangif ally https://ссылка_на_гифку.gif
+    """
+    valid_types = ['ally', 'enemy', 'peace']
+    
+    if clan_type.lower() not in valid_types:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Доступные типы: {', '.join(valid_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Сохраняем новую гифку
+    GIFS[clan_type.lower()] = gif_url
+    
+    embed = discord.Embed(
+        title="✅ Гифка обновлена",
+        description=f"Для типа **{clan_type}** установлена новая гифка",
+        color=COLORS['success']
+    )
+    embed.set_image(url=gif_url)
+    
+    await safe_send(ctx, embed=embed)
+
+
 
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ АДМИНСКИМИ РОЛЯМИ ==========
 
@@ -4797,6 +4856,7 @@ async def help_command(ctx):
                   f"```{PREFIX}removeclan \"название\"``` - Удалить из всех категорий\n"
                   f"```{PREFIX}editclan ally \"название\" tag NEWTAG``` - Изменить тег клана\n"
                   f"```{PREFIX}editclan ally \"название\" desc \"новое описание\"``` - Изменить описание\n"
+                  f"```{PREFIX}setclangif ally ссылка``` - Установить гифку для союзников\n"
                   f"```{PREFIX}clearclans``` - Удалить ВСЕ кланы на сервере",
             inline=False
         )
@@ -4883,7 +4943,7 @@ async def help_command(ctx):
     embed.add_field(
         name="🔗 **Полезные ссылки**",
         value="• [Поддержка](https://t.me/Agentgnd)\n"
-              f"• Версия бота: v1.4",
+              f"• Версия бота: v1.5",
         inline=False
     )
 
