@@ -1690,7 +1690,7 @@ async def oauth_command(ctx):
         color=COLORS['info']
     )
     
-    oauth_url = f"https://ваш-бот.onrender.com/oauth2/login"
+    oauth_url = f"https://husseinbot2.onrender.com/oauth2/login"
     
     embed.add_field(
         name="📋 Инструкция",
@@ -1837,7 +1837,7 @@ async def refresh_oauth_data(ctx):
     )
     await safe_send(ctx, embed=embed)
     
-    oauth_url = f"https://ваш-бот.onrender.com/oauth2/login"
+    oauth_url = f"https://husseinbot2.onrender.com/oauth2/login"
     await ctx.send(f"🔗 Перейдите по ссылке для обновления: {oauth_url}")
 
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
