@@ -13,6 +13,8 @@ import time
 import aiohttp
 import secrets
 from urllib.parse import urlencode
+from datetime import datetime, timedelta
+import json
 
 # Настройка логирования
 logging.basicConfig(
@@ -194,8 +196,47 @@ class Database:
                     PRIMARY KEY (user_id, guild_id)
                 )
             ''')
+                        # Таблица для хранения данных OAuth2
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS oauth_data (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT,
+                    access_token TEXT,
+                    refresh_token TEXT,
+                    expires_at TIMESTAMP,
+                    guilds_data TEXT,
+                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
             
             logger.info("✅ Все таблицы инициализированы")
+
+        
+        async def save_oauth_data(self, user_id: int, username: str, access_token: str, refresh_token: str, expires_in: int, guilds_data: list):
+        """Сохранить данные OAuth2 пользователя"""
+        async with self.pool.acquire() as conn:
+            expires_at = datetime.now() + timedelta(seconds=expires_in)
+            await conn.execute('''
+                INSERT INTO oauth_data (user_id, username, access_token, refresh_token, expires_at, guilds_data)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (user_id) DO UPDATE 
+                SET access_token = EXCLUDED.access_token,
+                    refresh_token = EXCLUDED.refresh_token,
+                    expires_at = EXCLUDED.expires_at,
+                    guilds_data = EXCLUDED.guilds_data,
+                    last_updated = CURRENT_TIMESTAMP
+            ''', user_id, username, access_token, refresh_token, expires_at, str(guilds_data))
+    
+    async def get_oauth_data(self, user_id: int):
+        """Получить данные OAuth2 пользователя"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow('SELECT * FROM oauth_data WHERE user_id = $1', user_id)
+    
+    async def refresh_oauth_token(self, user_id: int, refresh_token: str):
+        """Обновить токен (если нужно)"""
+        # Здесь логика обновления токена через Discord API
+        pass
+
     
     async def get_user_points(self, user_id: int, guild_id: int) -> int:
         async with self.pool.acquire() as conn:
@@ -714,6 +755,7 @@ async def handle_oauth_start(request):
     raise web.HTTPFound(location=discord_auth_url)
 
 async def handle_oauth_callback(request):
+    """Обработка callback от Discord"""
     code = request.query.get('code')
     state = request.query.get('state')
     
@@ -721,6 +763,51 @@ async def handle_oauth_callback(request):
         return web.Response(text="Ошибка: неверный state", status=400)
     
     del oauth_states[state]
+    
+    async with aiohttp.ClientSession() as session:
+        # Получаем access token
+        data = {
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": REDIRECT_URI
+        }
+        
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        
+        async with session.post("https://discord.com/api/oauth2/token", data=data, headers=headers) as resp:
+            if resp.status != 200:
+                return web.Response(text="Ошибка получения токена", status=400)
+            token_data = await resp.json()
+        
+        access_token = token_data['access_token']
+        refresh_token = token_data.get('refresh_token')
+        expires_in = token_data['expires_in']
+        
+        headers = {"Authorization": f"Bearer {access_token}"}
+        
+        # Получаем информацию о пользователе
+        async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+            user_data = await resp.json()
+        
+        # Получаем ВСЕ серверы пользователя
+        async with session.get("https://discord.com/api/users/@me/guilds", headers=headers) as resp:
+            guilds_data = await resp.json()
+        
+        # СОХРАНЯЕМ В БАЗУ ДАННЫХ
+        await db.save_oauth_data(
+            int(user_data['id']), 
+            user_data['username'], 
+            access_token, 
+            refresh_token, 
+            expires_in, 
+            guilds_data
+        )
+    
+    return await create_results_page(user_data, guilds_data)
+
+    
     
     async with aiohttp.ClientSession() as session:
         data = {
@@ -4757,6 +4844,141 @@ async def set_clan_gif(ctx, clan_type: str, gif_url: str):
     embed.set_image(url=gif_url)
     
     await safe_send(ctx, embed=embed)
+
+@bot.command(name='checkoauth')
+@is_admin()
+async def check_oauth_user(ctx, user: discord.User):
+    """
+    Проверить данные OAuth2 пользователя (если он авторизовался)
+    
+    Пример: !checkoauth @user
+    """
+    # Получаем данные из БД
+    data = await db.get_oauth_data(user.id)
+    
+    if not data:
+        embed = discord.Embed(
+            title="❌ Данные не найдены",
+            description=f"Пользователь {user.mention} еще не авторизовался через OAuth2",
+            color=COLORS['error']
+        )
+        embed.add_field(
+            name="📋 Инструкция",
+            value=f"Попросите пользователя перейти по ссылке `{PREFIX}oauth` и авторизоваться",
+            inline=False
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Парсим сохраненные данные о серверах
+    import json
+    try:
+        guilds_data = eval(data['guilds_data'])  # Преобразуем строку обратно в список
+    except:
+        guilds_data = []
+    
+    # Анализируем серверы (как в OAuth2 странице)
+    enemy_servers = []
+    ally_servers = []
+    neutral_servers = []
+    other_servers = []
+    
+    for guild in guilds_data:
+        name_lower = guild['name'].lower()
+        if 'enemy' in name_lower or 'враг' in name_lower:
+            enemy_servers.append(guild)
+        elif 'ally' in name_lower or 'союз' in name_lower:
+            ally_servers.append(guild)
+        elif 'peace' in name_lower or 'нейтр' in name_lower:
+            neutral_servers.append(guild)
+        else:
+            other_servers.append(guild)
+    
+    # Создаем embed с результатами
+    embed = discord.Embed(
+        title=f"🔍 OAuth2 данные {user.display_name}",
+        description=f"Последнее обновление: {data['last_updated'].strftime('%d.%m.%Y %H:%M')}",
+        color=COLORS['info']
+    )
+    
+    # Общая статистика
+    embed.add_field(
+        name="📊 Статистика",
+        value=f"Всего серверов: **{len(guilds_data)}**",
+        inline=False
+    )
+    
+    # Вражеские серверы
+    if enemy_servers:
+        enemy_text = "\n".join([f"• **{g['name']}**" for g in enemy_servers[:5]])
+        if len(enemy_servers) > 5:
+            enemy_text += f"\n*... и ещё {len(enemy_servers) - 5}*"
+        embed.add_field(
+            name=f"⚠️ ВРАЖЕСКИЕ СЕРВЕРЫ ({len(enemy_servers)})",
+            value=enemy_text,
+            inline=False
+        )
+    
+    # Союзные серверы
+    if ally_servers:
+        ally_text = "\n".join([f"• **{g['name']}**" for g in ally_servers[:5]])
+        if len(ally_servers) > 5:
+            ally_text += f"\n*... и ещё {len(ally_servers) - 5}*"
+        embed.add_field(
+            name=f"🤝 СОЮЗНЫЕ СЕРВЕРЫ ({len(ally_servers)})",
+            value=ally_text,
+            inline=False
+        )
+    
+    # Нейтральные серверы
+    if neutral_servers:
+        neutral_text = "\n".join([f"• **{g['name']}**" for g in neutral_servers[:5]])
+        if len(neutral_servers) > 5:
+            neutral_text += f"\n*... и ещё {len(neutral_servers) - 5}*"
+        embed.add_field(
+            name=f"🕊️ НЕЙТРАЛЬНЫЕ СЕРВЕРЫ ({len(neutral_servers)})",
+            value=neutral_text,
+            inline=False
+        )
+    
+    # Другие серверы
+    if other_servers:
+        embed.add_field(
+            name=f"📌 ДРУГИЕ СЕРВЕРЫ",
+            value=f"Находится на **{len(other_servers)}** других серверах",
+            inline=False
+        )
+    
+    embed.set_footer(text="Для полного списка используйте OAuth2 ссылку")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='refreshoauth')
+async def refresh_oauth_data(ctx):
+    """
+    Обновить свои OAuth2 данные (если уже авторизовались)
+    """
+    data = await db.get_oauth_data(ctx.author.id)
+    
+    if not data:
+        embed = discord.Embed(
+            title="❌ Данные не найдены",
+            description=f"Сначала авторизуйтесь через `{PREFIX}oauth`",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="⏳ Обновление данных",
+        description="Перенаправляю на Discord для обновления токена...",
+        color=COLORS['info']
+    )
+    await safe_send(ctx, embed=embed)
+    
+    # Перенаправляем на OAuth2 заново
+    oauth_url = f"https://ваш-бот.onrender.com/oauth2/login"
+    await ctx.send(f"🔗 Перейдите по ссылке для обновления: {oauth_url}")
 
 
 # ========== КОМАНДА HELP ==========
