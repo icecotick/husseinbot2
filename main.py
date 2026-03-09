@@ -36,7 +36,7 @@ PORT = int(os.getenv('PORT', '10000'))
 # ========== OAuth2 НАСТРОЙКИ ==========
 CLIENT_ID = os.getenv('CLIENT_ID')
 CLIENT_SECRET = os.getenv('CLIENT_SECRET')
-REDIRECT_URI = f"https://ваш-бот.onrender.com/oauth2/callback"  # ЗАМЕНИТЕ!
+REDIRECT_URI = f"https://husseinbot2.onrender.com/oauth2/callback"  # ЗАМЕНИТЕ!
 OAUTH2_SCOPES = ["identify", "guilds"]
 oauth_states = {}
 
