@@ -36,7 +36,7 @@ PORT = int(os.getenv('PORT', '10000'))
 # ========== OAuth2 НАСТРОЙКИ ==========
 CLIENT_ID = os.getenv('CLIENT_ID')
 CLIENT_SECRET = os.getenv('CLIENT_SECRET')
-REDIRECT_URI = f"https://husseinbot2.onrender.com/oauth2/callback"  # ЗАМЕНИТЕ!
+REDIRECT_URI = f"https://husseinbot2.onrender.com/oauth2/callback"  # Исправлено на ваш URL
 OAUTH2_SCOPES = ["identify", "guilds"]
 oauth_states = {}
 
@@ -77,26 +77,32 @@ GIFS = {
 
 # ========== СПИСКИ СЕРВЕРОВ ==========
 ENEMY_SERVERS = {
-    "Reydone": 12345678901234567890,
-    "NATO": 12345678901234567890,
+    "Название вражеского сервера 1": 123456789012345678,
+    "Название вражеского сервера 2": 123456789012345679,
 }
 
 ALLY_SERVERS = {
-    "FANTOM DESTROYERS": 1319658857831858317,
-    "Reborn The Fallen Fantoms": 1453345739034853490,
-    "Barrio Squad": 759339854613315655,
-    "Krissis": 1466433357201276961,
-    "Aesar": 1462191913435402342,
+    "Название союзного сервера 1": 123456789012345680,
 }
 
 NEUTRAL_SERVERS = {
-    "Moon Light": 1439693734475464918,
+    "Название нейтрального сервера 1": 123456789012345681,
 }
 
 ALL_TRACKED_SERVERS = {}
 ALL_TRACKED_SERVERS.update(ENEMY_SERVERS)
 ALL_TRACKED_SERVERS.update(ALLY_SERVERS)
 ALL_TRACKED_SERVERS.update(NEUTRAL_SERVERS)
+
+# ========== ROBLOX НАСТРОЙКИ ==========
+ENEMY_ROBLOX_TAGS = [
+    "[ENEMY]", "[ENEMIES]", "[ENEMYCLAN]", 
+    "[HATE]", "[WAR]", "[RAID]", "[HOSTILE]",
+    "[CLAN]", "[FAMILY]", "[CREW]",
+    " enemy ", " враг ", " hostile ",
+    " clan ", " family ", " crew ",
+    "⚔️", "👑", "💀"
+]
 
 # Настройки ролей для каждого сервера
 GUILD_ROLE_SETTINGS = {}
@@ -228,6 +234,17 @@ class Database:
                     expires_at TIMESTAMP,
                     guilds_data TEXT,
                     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Таблица для связи Discord и Roblox
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS roblox_links (
+                    discord_id BIGINT PRIMARY KEY,
+                    roblox_id BIGINT,
+                    roblox_username TEXT,
+                    linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_checked TIMESTAMP
                 )
             ''')
             
@@ -489,7 +506,6 @@ class Database:
     # ========== МЕТОДЫ ДЛЯ OAuth2 ==========
     
     async def save_oauth_data(self, user_id: int, username: str, access_token: str, refresh_token: str, expires_in: int, guilds_data: list):
-        """Сохранить данные OAuth2 пользователя"""
         async with self.pool.acquire() as conn:
             expires_at = datetime.now() + timedelta(seconds=expires_in)
             await conn.execute('''
@@ -504,9 +520,83 @@ class Database:
             ''', user_id, username, access_token, refresh_token, expires_at, str(guilds_data))
     
     async def get_oauth_data(self, user_id: int):
-        """Получить данные OAuth2 пользователя"""
         async with self.pool.acquire() as conn:
             return await conn.fetchrow('SELECT * FROM oauth_data WHERE user_id = $1', user_id)
+    
+    # ========== МЕТОДЫ ДЛЯ ROBLOX ==========
+    
+    async def link_roblox(self, discord_id: int, roblox_id: int, roblox_username: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO roblox_links (discord_id, roblox_id, roblox_username, last_checked)
+                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                ON CONFLICT (discord_id) DO UPDATE 
+                SET roblox_id = EXCLUDED.roblox_id,
+                    roblox_username = EXCLUDED.roblox_username,
+                    last_checked = CURRENT_TIMESTAMP
+            ''', discord_id, roblox_id, roblox_username)
+    
+    async def get_roblox_link(self, discord_id: int):
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow('SELECT * FROM roblox_links WHERE discord_id = $1', discord_id)
+
+# ========== ROBLOX ФУНКЦИИ ==========
+
+async def check_roblox_username(username: str):
+    """Проверяет наличие вражеских приписок в нике"""
+    if not username:
+        return False, None
+    
+    username_lower = username.lower()
+    
+    for tag in ENEMY_ROBLOX_TAGS:
+        tag_lower = tag.lower()
+        if tag_lower in username_lower:
+            return True, tag
+    return False, None
+
+async def get_roblox_user_id(username: str):
+    """Получить Roblox ID по имени"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://users.roblox.com/v1/usernames/users",
+                json={"usernames": [username]}
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data['data']:
+                        return data['data'][0]['id']
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка получения Roblox ID: {e}")
+        return None
+
+async def get_user_friends(user_id: int):
+    """Получить список друзей пользователя"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://friends.roblox.com/v1/users/{user_id}/friends") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get('data', [])
+        return []
+    except Exception as e:
+        logger.error(f"Ошибка получения друзей: {e}")
+        return []
+
+async def get_user_groups(user_id: int):
+    """Получить группы пользователя"""
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://groups.roblox.com/v1/users/{user_id}/groups/roles") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    return data.get('data', [])
+        return []
+    except Exception as e:
+        logger.error(f"Ошибка получения групп: {e}")
+        return []
 
 # ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
 
@@ -797,7 +887,9 @@ async def handle_oauth_callback(request):
         
         async with session.post("https://discord.com/api/oauth2/token", data=data, headers=headers) as resp:
             if resp.status != 200:
-                return web.Response(text="Ошибка получения токена", status=400)
+                error_text = await resp.text()
+                logger.error(f"Ошибка получения токена: {resp.status} - {error_text}")
+                return web.Response(text=f"Ошибка получения токена: {resp.status}", status=400)
             token_data = await resp.json()
         
         access_token = token_data['access_token']
@@ -846,7 +938,7 @@ async def create_results_page(user_data, guilds_data):
         
         guild_id = int(guild['id'])
         
-        # Проверяем по ID сервера (используем ENEMY_SERVERS и т.д.)
+        # Проверяем по ID сервера
         if guild_id in ENEMY_SERVERS.values():
             enemy_servers.append(guild_info)
         elif guild_id in ALLY_SERVERS.values():
@@ -1460,6 +1552,411 @@ async def on_guild_join(guild):
         logger.info(f"✅ Созданы стандартные настройки ролей для нового сервера {guild.name}")
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения настроек для нового сервера {guild.name}: {e}")
+
+# ========== ROBLOX КОМАНДЫ ==========
+
+@bot.command(name='checkroblox')
+@is_admin()
+async def check_roblox_user(ctx, roblox_username: str):
+    """
+    Проверить Roblox-пользователя на вражеские приписки
+    
+    Пример: !checkroblox [ENEMY]Player123
+    """
+    
+    status_msg = await ctx.send(f"🔍 Проверяю пользователя **{roblox_username}**...")
+    
+    # 1. Проверяем ник на наличие приписок
+    is_enemy, found_tag = await check_roblox_username(roblox_username)
+    
+    if is_enemy:
+        embed = discord.Embed(
+            title="⚠️ ВРАЖЕСКИЙ ПОЛЬЗОВАТЕЛЬ!",
+            description=f"**{roblox_username}** обнаружен в списке врагов",
+            color=COLORS['error']
+        )
+        embed.add_field(
+            name="📌 Найдена приписка",
+            value=f"`{found_tag}`",
+            inline=True
+        )
+        embed.set_footer(text="Будьте осторожны!")
+        
+        await status_msg.edit(content=None, embed=embed)
+        return
+    
+    # 2. Если в нике нет приписок, получаем информацию через API
+    try:
+        user_id = await get_roblox_user_id(roblox_username)
+        
+        if not user_id:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"Пользователь **{roblox_username}** не найден в Roblox",
+                color=COLORS['error']
+            )
+            await status_msg.edit(content=None, embed=embed)
+            return
+        
+        # Получаем информацию о пользователе
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"https://users.roblox.com/v1/users/{user_id}") as resp:
+                if resp.status == 200:
+                    user_info = await resp.json()
+                    description = user_info.get('description', '')
+                    display_name = user_info.get('displayName', '')
+                    
+                    # Проверяем описание и display name
+                    is_enemy_desc, found_desc_tag = await check_roblox_username(description)
+                    is_enemy_display, found_display_tag = await check_roblox_username(display_name)
+                    
+                    if is_enemy_desc or is_enemy_display:
+                        embed = discord.Embed(
+                            title="⚠️ ВРАГ В ПРОФИЛЕ!",
+                            description=f"**{roblox_username}** имеет вражеские теги в профиле",
+                            color=COLORS['orange']
+                        )
+                        
+                        if is_enemy_desc:
+                            embed.add_field(
+                                name="📝 В описании",
+                                value=f"`{found_desc_tag}`\n{description[:100]}",
+                                inline=False
+                            )
+                        
+                        if is_enemy_display:
+                            embed.add_field(
+                                name="👤 В отображаемом имени",
+                                value=f"`{found_display_tag}`",
+                                inline=False
+                            )
+                        
+                        await status_msg.edit(content=None, embed=embed)
+                        return
+        
+        # Если ничего не найдено
+        embed = discord.Embed(
+            title="✅ ПОЛЬЗОВАТЕЛЬ ЧИСТ",
+            description=f"**{roblox_username}** не имеет вражеских приписок",
+            color=COLORS['success']
+        )
+        embed.add_field(
+            name="🆔 Roblox ID",
+            value=f"`{user_id}`",
+            inline=True
+        )
+        await status_msg.edit(content=None, embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Ошибка проверки Roblox: {e}")
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Не удалось проверить пользователя: {str(e)[:100]}",
+            color=COLORS['error']
+        )
+        await status_msg.edit(content=None, embed=embed)
+
+@bot.command(name='checkfriends')
+@is_admin()
+async def check_roblox_friends(ctx, roblox_username: str):
+    """
+    Проверить ВСЕХ друзей Roblox-пользователя на вражеские приписки
+    
+    Пример: !checkfriends Player123
+    """
+    
+    status_msg = await ctx.send(f"🔍 Получаю список друзей **{roblox_username}**...")
+    
+    try:
+        # Получаем ID пользователя
+        user_id = await get_roblox_user_id(roblox_username)
+        
+        if not user_id:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"Пользователь **{roblox_username}** не найден в Roblox",
+                color=COLORS['error']
+            )
+            await status_msg.edit(content=None, embed=embed)
+            return
+        
+        # Получаем список друзей
+        await status_msg.edit(content=f"🔍 Анализирую друзей **{roblox_username}**... (может занять время)")
+        
+        friends = await get_user_friends(user_id)
+        
+        if not friends:
+            embed = discord.Embed(
+                title="👥 Нет друзей",
+                description=f"У **{roblox_username}** нет друзей или они скрыты",
+                color=COLORS['info']
+            )
+            await status_msg.edit(content=None, embed=embed)
+            return
+        
+        # Проверяем каждого друга
+        enemies_found = []
+        checked = 0
+        
+        for friend in friends[:50]:  # Ограничим 50 друзьями для скорости
+            friend_name = friend.get('name', '')
+            friend_display = friend.get('displayName', '')
+            
+            # Проверяем имя и display name
+            is_enemy_name, tag_name = await check_roblox_username(friend_name)
+            is_enemy_display, tag_display = await check_roblox_username(friend_display)
+            
+            if is_enemy_name or is_enemy_display:
+                enemies_found.append({
+                    'name': friend_name,
+                    'display': friend_display,
+                    'id': friend.get('id', '?'),
+                    'tag': tag_name or tag_display
+                })
+            
+            checked += 1
+        
+        # Формируем результат
+        if enemies_found:
+            embed = discord.Embed(
+                title=f"⚠️ Найдено {len(enemies_found)} врагов в друзьях!",
+                description=f"У пользователя **{roblox_username}** есть подозрительные друзья",
+                color=COLORS['error']
+            )
+            
+            for enemy in enemies_found[:10]:  # Показываем первых 10
+                name = enemy['display'] if enemy['display'] != enemy['name'] else enemy['name']
+                embed.add_field(
+                    name=name,
+                    value=f"ID: {enemy['id']} | Тег: {enemy['tag']}",
+                    inline=False
+                )
+            
+            if len(enemies_found) > 10:
+                embed.set_footer(text=f"и ещё {len(enemies_found) - 10} врагов...")
+            
+        else:
+            embed = discord.Embed(
+                title="✅ Друзья чисты",
+                description=f"У **{roblox_username}** нет друзей с вражескими приписками",
+                color=COLORS['success']
+            )
+        
+        embed.add_field(
+            name="📊 Статистика",
+            value=f"Проверено друзей: **{checked}**",
+            inline=False
+        )
+        
+        await status_msg.edit(content=None, embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Ошибка проверки друзей: {e}")
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Не удалось проверить друзей: {str(e)[:100]}",
+            color=COLORS['error']
+        )
+        await status_msg.edit(content=None, embed=embed)
+
+@bot.command(name='addrobloxtag')
+@is_admin()
+async def add_roblox_tag(ctx, tag: str):
+    """
+    Добавить новую вражескую приписку для Roblox
+    
+    Пример: !addrobloxtag [ENEMY]
+    """
+    global ENEMY_ROBLOX_TAGS
+    
+    if tag in ENEMY_ROBLOX_TAGS:
+        embed = discord.Embed(
+            title="❌ Тег уже существует",
+            description=f"`{tag}` уже есть в списке",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    ENEMY_ROBLOX_TAGS.append(tag)
+    
+    embed = discord.Embed(
+        title="✅ Тег добавлен",
+        description=f"`{tag}` теперь считается вражеской припиской в Roblox",
+        color=COLORS['success']
+    )
+    
+    # Показываем первые 10 тегов
+    tags_text = "\n".join([f"• `{t}`" for t in ENEMY_ROBLOX_TAGS[:10]])
+    if len(ENEMY_ROBLOX_TAGS) > 10:
+        tags_text += f"\n*... и ещё {len(ENEMY_ROBLOX_TAGS) - 10}*"
+    
+    embed.add_field(
+        name="📋 Текущие теги",
+        value=tags_text,
+        inline=False
+    )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='listrobloxtags')
+@is_admin()
+async def list_roblox_tags(ctx):
+    """Показать все вражеские приписки для Roblox"""
+    
+    embed = discord.Embed(
+        title="📋 Список вражеских приписок Roblox",
+        description=f"Всего: **{len(ENEMY_ROBLOX_TAGS)}**",
+        color=COLORS['info']
+    )
+    
+    # Разбиваем на несколько полей, если много тегов
+    chunk_size = 15
+    for i in range(0, len(ENEMY_ROBLOX_TAGS), chunk_size):
+        chunk = ENEMY_ROBLOX_TAGS[i:i+chunk_size]
+        embed.add_field(
+            name=f"Теги {i+1}-{i+len(chunk)}",
+            value="\n".join([f"`{t}`" for t in chunk]),
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='removerobloxtag')
+@is_admin()
+async def remove_roblox_tag(ctx, tag: str):
+    """
+    Удалить вражескую приписку из списка
+    
+    Пример: !removerobloxtag [ENEMY]
+    """
+    global ENEMY_ROBLOX_TAGS
+    
+    if tag not in ENEMY_ROBLOX_TAGS:
+        embed = discord.Embed(
+            title="❌ Тег не найден",
+            description=f"`{tag}` нет в списке",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    ENEMY_ROBLOX_TAGS.remove(tag)
+    
+    embed = discord.Embed(
+        title="✅ Тег удален",
+        description=f"`{tag}` удален из списка вражеских приписок",
+        color=COLORS['success']
+    )
+    
+    await ctx.send(embed=embed)
+
+@bot.command(name='linkroblox')
+async def link_roblox(ctx, roblox_username: str):
+    """
+    Привязать свой Roblox-аккаунт к Discord
+    
+    Пример: !linkroblox MyRobloxUsername
+    """
+    
+    status_msg = await ctx.send(f"🔗 Привязываю **{roblox_username}** к вашему аккаунту...")
+    
+    try:
+        # Получаем Roblox ID
+        user_id = await get_roblox_user_id(roblox_username)
+        
+        if not user_id:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"Пользователь **{roblox_username}** не найден в Roblox",
+                color=COLORS['error']
+            )
+            await status_msg.edit(content=None, embed=embed)
+            return
+        
+        # Сохраняем в БД
+        await db.link_roblox(ctx.author.id, user_id, roblox_username)
+        
+        embed = discord.Embed(
+            title="✅ Аккаунт привязан",
+            description=f"Roblox-аккаунт **{roblox_username}** успешно привязан к вашему Discord",
+            color=COLORS['success']
+        )
+        embed.add_field(
+            name="🆔 Roblox ID",
+            value=f"`{user_id}`",
+            inline=True
+        )
+        
+        # Проверяем на вражеские приписки
+        is_enemy, tag = await check_roblox_username(roblox_username)
+        if is_enemy:
+            embed.add_field(
+                name="⚠️ ВНИМАНИЕ",
+                value=f"Обнаружена вражеская приписка: `{tag}`",
+                inline=False
+            )
+        
+        await status_msg.edit(content=None, embed=embed)
+        
+    except Exception as e:
+        logger.error(f"Ошибка привязки Roblox: {e}")
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Не удалось привязать аккаунт: {str(e)[:100]}",
+            color=COLORS['error']
+        )
+        await status_msg.edit(content=None, embed=embed)
+
+@bot.command(name='myroblox')
+async def my_roblox(ctx):
+    """Показать свой привязанный Roblox-аккаунт"""
+    
+    data = await db.get_roblox_link(ctx.author.id)
+    
+    if not data:
+        embed = discord.Embed(
+            title="❌ Аккаунт не привязан",
+            description=f"Используйте `{PREFIX}linkroblox username` чтобы привязать Roblox-аккаунт",
+            color=COLORS['info']
+        )
+        await ctx.send(embed=embed)
+        return
+    
+    # Проверяем на вражеские приписки
+    is_enemy, tag = await check_roblox_username(data['roblox_username'])
+    
+    embed = discord.Embed(
+        title="🎮 Ваш Roblox-аккаунт",
+        color=COLORS['error'] if is_enemy else COLORS['success']
+    )
+    
+    embed.add_field(
+        name="👤 Имя",
+        value=data['roblox_username'],
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🆔 ID",
+        value=f"`{data['roblox_id']}`",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📅 Привязан",
+        value=data['linked_at'].strftime('%d.%m.%Y'),
+        inline=True
+    )
+    
+    if is_enemy:
+        embed.add_field(
+            name="⚠️ СТАТУС",
+            value=f"ВРАГ (найдена приписка: {tag})",
+            inline=False
+        )
+    
+    await ctx.send(embed=embed)
 
 # ========== КОМАНДЫ ДЛЯ КЛАНОВ С ГИФКАМИ ==========
 
@@ -4925,7 +5422,9 @@ async def help_command(ctx):
               f"```{PREFIX}peaceclans``` - Показать список нейтральных кланов\n"
               f"```{PREFIX}allclans``` - Показать все кланы на сервере\n"
               f"```{PREFIX}claninfo [тип] \"название\"``` - Информация о конкретном клане\n"
-              f"```{PREFIX}searchclan \"название\"``` - Поиск клана по названию",
+              f"```{PREFIX}searchclan \"название\"``` - Поиск клана по названию\n"
+              f"```{PREFIX}linkroblox username``` - Привязать свой Roblox-аккаунт\n"
+              f"```{PREFIX}myroblox``` - Показать свой привязанный Roblox-аккаунт",
         inline=False
     )
     
@@ -5020,6 +5519,16 @@ async def help_command(ctx):
         )
         
         embed.add_field(
+            name="🎮 **Roblox проверка (Админ)**",
+            value=f"```{PREFIX}checkroblox username``` - Проверить Roblox-пользователя на вражеские приписки\n"
+                  f"```{PREFIX}checkfriends username``` - Проверить всех друзей Roblox-пользователя\n"
+                  f"```{PREFIX}addrobloxtag тег``` - Добавить новую вражескую приписку\n"
+                  f"```{PREFIX}removerobloxtag тег``` - Удалить вражескую приписку\n"
+                  f"```{PREFIX}listrobloxtags``` - Показать все вражеские приписки",
+            inline=False
+        )
+        
+        embed.add_field(
             name="🗳️ **Система голосования (Vouch)**",
             value=f"```{PREFIX}vouch @пользователь @роль``` - Создать голосование за повышение\n"
                   f"```{PREFIX}endvouch``` - Принудительно завершить голосование\n"
@@ -5088,14 +5597,15 @@ async def help_command(ctx):
               f"`{PREFIX}addrole 500 \"Легендарный рейдер\"` - добавить новую роль\n"
               f"`{PREFIX}addadminrole @Админ` - добавить админскую роль\n"
               f"`{PREFIX}addclan ally \"Братство\" [BR] \"Наши верные союзники\"` - добавить клан\n"
-              f"`{PREFIX}oauth` - проверить все серверы пользователя",
+              f"`{PREFIX}oauth` - проверить все серверы пользователя\n"
+              f"`{PREFIX}checkroblox [ENEMY]Player` - проверить Roblox-пользователя",
         inline=False
     )
     
     embed.add_field(
         name="🔗 **Полезные ссылки**",
         value=f"• [Поддержка](https://t.me/Agentgnd)\n"
-              f"• Версия бота: v2.0 (с OAuth2, гифками и воучами)",
+              f"• Версия бота: v3.0 (с OAuth2, гифками, воучами и Roblox)",
         inline=False
     )
 
