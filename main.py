@@ -557,16 +557,28 @@ async def check_roblox_username(username: str):
 
 async def get_roblox_user_id(username: str):
     """Получить Roblox ID по имени"""
+    if not username:
+        return None
+    
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 "https://users.roblox.com/v1/usernames/users",
-                json={"usernames": [username]}
+                json={"usernames": [username], "excludeBannedUsers": False}
             ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    if data['data']:
+                    if data and 'data' in data and len(data['data']) > 0:
                         return data['data'][0]['id']
+                elif resp.status == 429:
+                    logger.error("Roblox API rate limit exceeded")
+                    return None
+                else:
+                    logger.error(f"Roblox API error: {resp.status}")
+                    return None
+        return None
+    except asyncio.TimeoutError:
+        logger.error("Roblox API timeout")
         return None
     except Exception as e:
         logger.error(f"Ошибка получения Roblox ID: {e}")
