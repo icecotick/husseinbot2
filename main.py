@@ -1859,6 +1859,16 @@ async def link_roblox(ctx, roblox_username: str):
     Пример: !linkroblox MyRobloxUsername
     """
     
+    # Проверяем, не пустой ли username
+    if not roblox_username or len(roblox_username) > 50:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Имя пользователя должно быть от 1 до 50 символов",
+            color=COLORS['error']
+        )
+        await ctx.send(embed=embed)
+        return
+    
     status_msg = await ctx.send(f"🔗 Привязываю **{roblox_username}** к вашему аккаунту...")
     
     try:
@@ -1899,11 +1909,19 @@ async def link_roblox(ctx, roblox_username: str):
         
         await status_msg.edit(content=None, embed=embed)
         
+    except aiohttp.ClientError as e:
+        logger.error(f"Ошибка сети при привязке Roblox: {e}")
+        embed = discord.Embed(
+            title="❌ Ошибка сети",
+            description="Не удалось подключиться к Roblox API. Попробуйте позже.",
+            color=COLORS['error']
+        )
+        await status_msg.edit(content=None, embed=embed)
     except Exception as e:
         logger.error(f"Ошибка привязки Roblox: {e}")
         embed = discord.Embed(
             title="❌ Ошибка",
-            description=f"Не удалось привязать аккаунт: {str(e)[:100]}",
+            description=f"Не удалось привязать аккаунт. Попробуйте позже.",
             color=COLORS['error']
         )
         await status_msg.edit(content=None, embed=embed)
