@@ -82,11 +82,17 @@ ENEMY_SERVERS = {
 }
 
 ALLY_SERVERS = {
-    "Название союзного сервера 1": 123456789012345680,
+    "Fantom Destroyers": 1319658857831858317,
+    "Aesar": 1462191913435402342,
+    "Exasperation": 1445074595685076994,
+    "Reborn The Fallen Fantoms": 1453345739034853490,
+    "BRSQ | Barrio Squad": 759339854613315655,
+    "KRISSIS": 1466433357201276961
+    
 }
 
 NEUTRAL_SERVERS = {
-    "Название нейтрального сервера 1": 123456789012345681,
+    "Moon Light": 1439693734475464918,
 }
 
 ALL_TRACKED_SERVERS = {}
@@ -95,14 +101,7 @@ ALL_TRACKED_SERVERS.update(ALLY_SERVERS)
 ALL_TRACKED_SERVERS.update(NEUTRAL_SERVERS)
 
 # ========== ROBLOX НАСТРОЙКИ ==========
-ENEMY_ROBLOX_TAGS = [
-    "[ENEMY]", "[ENEMIES]", "[ENEMYCLAN]", 
-    "[HATE]", "[WAR]", "[RAID]", "[HOSTILE]",
-    "[CLAN]", "[FAMILY]", "[CREW]",
-    " enemy ", " враг ", " hostile ",
-    " clan ", " family ", " crew ",
-    "⚔️", "👑", "💀"
-]
+ENEMY_ROBLOX_TAGS = ["VXRS", "VQS"]
 
 # Настройки ролей для каждого сервера
 GUILD_ROLE_SETTINGS = {}
