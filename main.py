@@ -5391,233 +5391,7 @@ async def check_expired_vouches():
 
 # ========== КОМАНДА HELP ==========
 
-@bot.command(name='help')
-async def help_command(ctx):
-    is_user_admin = False
-    try:
-        is_user_admin = ctx.author.guild_permissions.administrator or any(
-            admin_role_id in [role.id for role in ctx.author.roles] 
-            for admin_role_id in ADMIN_ROLE_IDS
-        )
-    except:
-        pass
-    
-    embed = discord.Embed(
-        title="📚 Помощь по командам бота",
-        description=f"**Префикс команд:** `{PREFIX}`\n"
-                   f"Все команды начинаются с префикса `{PREFIX}`\n"
-                   f"Пример: `{PREFIX}points @user`",
-        color=COLORS['info']
-    )
-    
-    embed.add_field(
-        name="👤 **Команды для всех пользователей**",
-        value=f"```{PREFIX}points [@пользователь]``` - Проверить свои или чужие поинты\n"
-              f"```{PREFIX}leaderboard [страница]``` - Показать топ пользователей по поинтам\n"
-              f"```{PREFIX}roles``` - Показать систему ролей за поинты\n"
-              f"```{PREFIX}ping``` - Проверить статус бота и задержку\n"
-              f"```{PREFIX}help``` - Показать это сообщение\n"
-              f"```{PREFIX}allyclans``` - Показать список союзных кланов\n"
-              f"```{PREFIX}enemyclans``` - Показать список вражеских кланов\n"
-              f"```{PREFIX}peaceclans``` - Показать список нейтральных кланов\n"
-              f"```{PREFIX}allclans``` - Показать все кланы на сервере\n"
-              f"```{PREFIX}claninfo [тип] \"название\"``` - Информация о конкретном клане\n"
-              f"```{PREFIX}searchclan \"название\"``` - Поиск клана по названию\n"
-              f"```{PREFIX}linkroblox username``` - Привязать свой Roblox-аккаунт\n"
-              f"```{PREFIX}myroblox``` - Показать свой привязанный Roblox-аккаунт",
-        inline=False
-    )
-    
-    if is_user_admin:
-        embed.add_field(
-            name="💰 **Управление поинтами (Админ)**",
-            value=f"```{PREFIX}addpoints @user количество [причина]``` - Выдать поинты пользователю\n"
-                  f"```{PREFIX}removepoints @user количество [причина]``` - Забрать поинты у пользователя\n"
-                  f"```{PREFIX}setpoints @user количество [причина]``` - Установить точное количество поинтов\n"
-                  f"```{PREFIX}addpoints_multi количество @user1 @user2 ...``` - Выдать поинты нескольким пользователям\n"
-                  f"```{PREFIX}resetpoints``` - СБРОСИТЬ ВСЕ поинты на сервере (требует подтверждения)",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🎭 **Управление ролями за поинты (Админ)**",
-            value=f"```{PREFIX}addrole 200 \"название роли\"``` - Добавить новую роль за поинты\n"
-                  f"```{PREFIX}removerole 200``` - Удалить роль по количеству поинтов\n"
-                  f"```{PREFIX}removerolebyname \"название роли\"``` - Удалить роль по названию\n"
-                  f"```{PREFIX}editrole 200 250``` - Изменить количество поинтов для роли\n"
-                  f"```{PREFIX}editrole 200 \"новое название\"``` - Изменить название роли\n"
-                  f"```{PREFIX}editrole 200 250 \"новое название\"``` - Изменить и поинты, и название\n"
-                  f"```{PREFIX}setrolecolor 200 #FF0000``` - Установить цвет роли (HEX код)\n"
-                  f"```{PREFIX}setrolecolor 200 red``` - Или по названию цвета\n"
-                  f"```{PREFIX}reorderroles``` - Пересоздать все роли в правильном порядке\n"
-                  f"```{PREFIX}updateroles``` - Обновить роли для ВСЕХ участников сервера\n"
-                  f"```{PREFIX}saveroles``` - Сохранить конфигурацию ролей в файл\n"
-                  f"```{PREFIX}reloadroles``` - Перезагрузить роли из базы данных",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="👑 **Управление админскими ролями (Админ)**",
-            value=f"```{PREFIX}addadminrole @роль``` - Добавить роль в список админов бота\n"
-                  f"```{PREFIX}removeadminrole @роль``` - Удалить роль из списка админов\n"
-                  f"```{PREFIX}listadminroles``` - Показать все текущие админские роли\n"
-                  f"```{PREFIX}clearadminroles``` - Удалить ВСЕ админские роли (требует подтверждения)",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🔒 **Управление блокировкой каналов (Админ)**",
-            value=f"```{PREFIX}addchannel #канал``` - Добавить канал в список для блокировки\n"
-                  f"```{PREFIX}removechannel [#канал]``` - Удалить канал из списка\n"
-                  f"```{PREFIX}listchannels``` - Показать все каналы в списке\n"
-                  f"```{PREFIX}lockchannels @роль [тип]``` - Заблокировать каналы для роли\n"
-                  f"```{PREFIX}unlockchannels [@роль]``` - Разблокировать каналы для роли\n"
-                  f"```{PREFIX}lockinfo``` - Показать все активные блокировки\n"
-                  f"```{PREFIX}clearlocks``` - Удалить ВСЕ блокировки на сервере",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="⚡ **Быстрые команды для блокировочной роли**",
-            value=f"```{PREFIX}lockrole @роль``` - Установить роль для быстрых команд\n"
-                  f"```{PREFIX}lock [тип]``` - Быстрая блокировка каналов для роли\n"
-                  f"```{PREFIX}unlock``` - Быстрая разблокировка каналов для роли\n"
-                  f"```{PREFIX}currentrole``` - Показать текущую роль\n"
-                  f"```{PREFIX}resetrole``` - Сбросить установленную роль\n"
-                  f"**Типы блокировки:** `send` (только писать), `view` (скрыть), `both` (полная)",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🏰 **Управление кланами (Админ)**",
-            value=f"```{PREFIX}addclan ally \"название\" [тег] [описание]``` - Добавить союзника\n"
-                  f"```{PREFIX}addclan enemy \"название\" [тег] [описание]``` - Добавить врага\n"
-                  f"```{PREFIX}addclan peace \"название\" [тег] [описание]``` - Добавить нейтрального\n"
-                  f"```{PREFIX}removeclan ally \"название\"``` - Удалить из союзников\n"
-                  f"```{PREFIX}removeclan enemy \"название\"``` - Удалить из врагов\n"
-                  f"```{PREFIX}removeclan peace \"название\"``` - Удалить из нейтральных\n"
-                  f"```{PREFIX}removeclan \"название\"``` - Удалить из всех категорий\n"
-                  f"```{PREFIX}editclan ally \"название\" tag NEWTAG``` - Изменить тег клана\n"
-                  f"```{PREFIX}editclan ally \"название\" desc \"новое описание\"``` - Изменить описание\n"
-                  f"```{PREFIX}setclangif ally ссылка``` - Установить гифку для союзников\n"
-                  f"```{PREFIX}clearclans``` - Удалить ВСЕ кланы на сервере",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🔍 **OAuth2 проверка серверов**",
-            value=f"```{PREFIX}oauth``` - Получить ссылку для проверки ВСЕХ серверов пользователя\n"
-                  f"```{PREFIX}checkoauth @user``` - Проверить сохраненные OAuth2 данные пользователя\n"
-                  f"```{PREFIX}refreshoauth``` - Обновить свои OAuth2 данные",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📊 **Экспорт данных (Админ)**",
-            value=f"```{PREFIX}export``` - Экспортировать все данные о поинтах в CSV файл",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🎮 **Roblox проверка (Админ)**",
-            value=f"```{PREFIX}checkroblox username``` - Проверить Roblox-пользователя на вражеские приписки\n"
-                  f"```{PREFIX}checkfriends username``` - Проверить всех друзей Roblox-пользователя\n"
-                  f"```{PREFIX}addrobloxtag тег``` - Добавить новую вражескую приписку\n"
-                  f"```{PREFIX}removerobloxtag тег``` - Удалить вражескую приписку\n"
-                  f"```{PREFIX}listrobloxtags``` - Показать все вражеские приписки",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🗳️ **Система голосования (Vouch)**",
-            value=f"```{PREFIX}vouch @пользователь @роль``` - Создать голосование за повышение\n"
-                  f"```{PREFIX}endvouch``` - Принудительно завершить голосование\n"
-                  f"```{PREFIX}vouchinfo``` - Информация об активном голосовании",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="ℹ️ **Типы блокировки каналов**",
-            value="• `send` - Запрет на отправку сообщений, реакций и файлов\n"
-                  "• `view` - Полное скрытие канала (не видно)\n"
-                  "• `both` - Полная блокировка (скрыто + нельзя писать)",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="📋 **Типы кланов**",
-            value="• `ally` - Союзники (🤝)\n"
-                  "• `enemy` - Враги (⚔️)\n"
-                  "• `peace` - Нейтральные/Пис (🕊️)",
-            inline=False
-        )
-        
-        embed.add_field(
-            name="🎨 **Доступные цвета для ролей**",
-            value="**HEX коды:** `#FF0000` (красный), `#00FF00` (зеленый), `#0000FF` (синий)\n"
-                  "**Названия:** `red`, `blue`, `green`, `yellow`, `purple`, `orange`, `gold`, `pink`, `brown`, `black`, `white`",
-            inline=False
-        )
-    
-    admin_roles_text = []
-    if ADMIN_ROLE_IDS:
-        for role_id in ADMIN_ROLE_IDS[:5]:
-            role = ctx.guild.get_role(role_id)
-            if role:
-                admin_roles_text.append(f"• {role.mention}")
-            else:
-                admin_roles_text.append(f"• Роль ID: `{role_id}`")
-        
-        if len(ADMIN_ROLE_IDS) > 5:
-            admin_roles_text.append(f"*... и ещё {len(ADMIN_ROLE_IDS) - 5} ролей*")
-    else:
-        admin_roles_text = ["• Не настроены (только администраторы Discord)"]
-    
-    role_settings, _ = get_guild_settings(ctx.guild.id)
-    roles_count = len(role_settings)
-    if roles_count > 0:
-        roles_range = f"от {min(role_settings.keys())} до {max(role_settings.keys())} поинтов"
-    else:
-        roles_range = "не настроены"
-    
-    embed.add_field(
-        name="ℹ️ **Информация о системе**",
-        value=f"**📊 Серверов:** {len(bot.guilds)}\n"
-              f"**🎭 Ролей за поинты:** {roles_count} ({roles_range})\n"
-              f"**👑 Админские роли:**\n" + "\n".join(admin_roles_text),
-        inline=False
-    )
-    
-    embed.add_field(
-        name="📝 **Примеры использования**",
-        value=f"`{PREFIX}points` - проверить свои поинты\n"
-              f"`{PREFIX}points @User` - проверить поинты пользователя\n"
-              f"`{PREFIX}leaderboard` - топ-10 пользователей\n"
-              f"`{PREFIX}addpoints @User 100 Спасибо за активность` - выдать поинты\n"
-              f"`{PREFIX}addrole 500 \"Легендарный рейдер\"` - добавить новую роль\n"
-              f"`{PREFIX}addadminrole @Админ` - добавить админскую роль\n"
-              f"`{PREFIX}addclan ally \"Братство\" [BR] \"Наши верные союзники\"` - добавить клан\n"
-              f"`{PREFIX}oauth` - проверить все серверы пользователя\n"
-              f"`{PREFIX}checkroblox [ENEMY]Player` - проверить Roblox-пользователя",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="🔗 **Полезные ссылки**",
-        value=f"• [Поддержка](https://t.me/Agentgnd)\n"
-              f"• Версия бота: v3.0 (с OAuth2, гифками, воучами и Roblox)",
-        inline=False
-    )
 
-    embed.set_footer(
-        text=f"Запрошено: {ctx.author.display_name} | Всего команд: {len(bot.commands)} | {datetime.now().strftime('%d.%m.%Y %H:%M')}",
-        icon_url=ctx.author.display_avatar.url
-    )
-    
-    if bot.user.avatar:
-        embed.set_thumbnail(url=bot.user.avatar.url)
-    
-    await safe_send(ctx, embed=embed)
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
@@ -5645,6 +5419,169 @@ async def safe_edit(message, content=None, embed=None, view=None):
         return None
 
 # ========== ОБРАБОТКА ОШИБОК ==========
+
+@bot.command(name='help')
+async def help_command(ctx):
+    """Показать все команды"""
+    # Проверяем, является ли пользователь админом
+    is_user_admin = False
+    try:
+        is_user_admin = ctx.author.guild_permissions.administrator or any(
+            admin_role_id in [role.id for role in ctx.author.roles] 
+            for admin_role_id in ADMIN_ROLE_IDS
+        )
+    except:
+        pass
+    
+    embed = discord.Embed(
+        title="📚 Помощь по командам бота",
+        description=f"**Префикс команд:** `{PREFIX}`\nВсе команды начинаются с префикса `{PREFIX}`\nПример: `{PREFIX}points @user`",
+        color=COLORS['info']
+    )
+    
+    # Команды для всех пользователей (более короткое описание)
+    user_commands = (
+        f"`{PREFIX}points [@user]` - Проверить поинты\n"
+        f"`{PREFIX}leaderboard` - Топ пользователей\n"
+        f"`{PREFIX}roles` - Система ролей\n"
+        f"`{PREFIX}ping` - Статус бота\n"
+        f"`{PREFIX}allyclans` - Союзные кланы\n"
+        f"`{PREFIX}enemyclans` - Вражеские кланы\n"
+        f"`{PREFIX}peaceclans` - Нейтральные кланы\n"
+        f"`{PREFIX}allclans` - Все кланы\n"
+        f"`{PREFIX}claninfo` - Инфо о клане\n"
+        f"`{PREFIX}linkroblox` - Привязать Roblox\n"
+        f"`{PREFIX}myroblox` - Мой Roblox"
+    )
+    embed.add_field(name="👤 Для всех", value=user_commands, inline=False)
+    
+    if is_user_admin:
+        # Поинты (админ)
+        points_commands = (
+            f"`{PREFIX}addpoints @user кол-во [причина]` - Выдать поинты\n"
+            f"`{PREFIX}removepoints @user кол-во [причина]` - Забрать поинты\n"
+            f"`{PREFIX}setpoints @user кол-во [причина]` - Установить поинты\n"
+            f"`{PREFIX}addpoints_multi кол-во @user1 @user2...` - Массовая выдача\n"
+            f"`{PREFIX}resetpoints` - Сброс ВСЕХ поинтов"
+        )
+        embed.add_field(name="💰 Поинты (админ)", value=points_commands, inline=False)
+        
+        # Роли за поинты (админ)
+        role_commands = (
+            f"`{PREFIX}addrole кол-во \"название\"` - Добавить роль\n"
+            f"`{PREFIX}removerole кол-во` - Удалить роль\n"
+            f"`{PREFIX}removerolebyname \"название\"` - Удалить по названию\n"
+            f"`{PREFIX}editrole старое_кол-во новое_кол-во [название]` - Изменить\n"
+            f"`{PREFIX}setrolecolor кол-во цвет` - Установить цвет\n"
+            f"`{PREFIX}reorderroles` - Пересоздать роли\n"
+            f"`{PREFIX}updateroles` - Обновить роли у всех\n"
+            f"`{PREFIX}saveroles` - Сохранить конфиг\n"
+            f"`{PREFIX}reloadroles` - Загрузить из БД"
+        )
+        embed.add_field(name="🎭 Роли за поинты (админ)", value=role_commands, inline=False)
+        
+        # Админские роли
+        admin_role_commands = (
+            f"`{PREFIX}addadminrole @роль` - Добавить админ-роль\n"
+            f"`{PREFIX}removeadminrole @роль` - Удалить админ-роль\n"
+            f"`{PREFIX}listadminroles` - Список админ-ролей\n"
+            f"`{PREFIX}clearadminroles` - Очистить админ-роли"
+        )
+        embed.add_field(name="👑 Админские роли", value=admin_role_commands, inline=False)
+        
+        # Блокировка каналов
+        lock_commands = (
+            f"`{PREFIX}addchannel #канал` - Добавить канал\n"
+            f"`{PREFIX}removechannel [#канал]` - Удалить канал\n"
+            f"`{PREFIX}listchannels` - Список каналов\n"
+            f"`{PREFIX}lockchannels @роль [тип]` - Заблокировать\n"
+            f"`{PREFIX}unlockchannels [@роль]` - Разблокировать\n"
+            f"`{PREFIX}lockinfo` - Инфо о блокировках\n"
+            f"`{PREFIX}clearlocks` - Очистить блокировки"
+        )
+        embed.add_field(name="🔒 Блокировка каналов", value=lock_commands, inline=False)
+        
+        # Быстрые команды
+        quick_commands = (
+            f"`{PREFIX}lockrole @роль` - Установить роль\n"
+            f"`{PREFIX}lock [тип]` - Быстрая блокировка\n"
+            f"`{PREFIX}unlock` - Быстрая разблокировка\n"
+            f"`{PREFIX}currentrole` - Текущая роль\n"
+            f"`{PREFIX}resetrole` - Сбросить роль"
+        )
+        embed.add_field(name="⚡ Быстрые команды", value=quick_commands, inline=False)
+        
+        # Управление кланами
+        clan_commands = (
+            f"`{PREFIX}addclan ally \"название\" [тег] [опис]` - Добавить союзника\n"
+            f"`{PREFIX}addclan enemy \"название\" [тег] [опис]` - Добавить врага\n"
+            f"`{PREFIX}addclan peace \"название\" [тег] [опис]` - Добавить нейтрального\n"
+            f"`{PREFIX}removeclan [тип] \"название\"` - Удалить клан\n"
+            f"`{PREFIX}editclan тип \"название\" поле значение` - Изменить\n"
+            f"`{PREFIX}setclangif тип ссылка` - Установить гифку\n"
+            f"`{PREFIX}clearclans` - Удалить ВСЕ кланы"
+        )
+        embed.add_field(name="🏰 Управление кланами", value=clan_commands, inline=False)
+        
+        # OAuth2
+        oauth_commands = (
+            f"`{PREFIX}oauth` - Ссылка для проверки\n"
+            f"`{PREFIX}checkoauth @user` - Проверить данные\n"
+            f"`{PREFIX}refreshoauth` - Обновить данные"
+        )
+        embed.add_field(name="🔍 OAuth2", value=oauth_commands, inline=False)
+        
+        # Roblox
+        roblox_commands = (
+            f"`{PREFIX}checkroblox username` - Проверить пользователя\n"
+            f"`{PREFIX}checkfriends username` - Проверить друзей\n"
+            f"`{PREFIX}addrobloxtag тег` - Добавить приписку\n"
+            f"`{PREFIX}removerobloxtag тег` - Удалить приписку\n"
+            f"`{PREFIX}listrobloxtags` - Список приписок"
+        )
+        embed.add_field(name="🎮 Roblox (админ)", value=roblox_commands, inline=False)
+        
+        # Голосование
+        vouch_commands = (
+            f"`{PREFIX}vouch @user @роль` - Создать голосование\n"
+            f"`{PREFIX}endvouch` - Завершить голосование\n"
+            f"`{PREFIX}vouchinfo` - Инфо о голосовании"
+        )
+        embed.add_field(name="🗳️ Голосование", value=vouch_commands, inline=False)
+        
+        # Экспорт
+        embed.add_field(name="📊 Экспорт", value=f"`{PREFIX}export` - CSV файл", inline=False)
+    
+    # Информация о системе (коротко)
+    admin_roles_text = []
+    if ADMIN_ROLE_IDS:
+        for role_id in ADMIN_ROLE_IDS[:3]:
+            role = ctx.guild.get_role(role_id)
+            if role:
+                admin_roles_text.append(f"• {role.mention}")
+        if len(ADMIN_ROLE_IDS) > 3:
+            admin_roles_text.append(f"*... и ещё {len(ADMIN_ROLE_IDS)-3}*")
+    else:
+        admin_roles_text = ["• Не настроены"]
+    
+    role_settings, _ = get_guild_settings(ctx.guild.id)
+    roles_count = len(role_settings)
+    
+    embed.add_field(
+        name="ℹ️ Система",
+        value=f"**Серверов:** {len(bot.guilds)} | **Ролей:** {roles_count}\n" + "\n".join(admin_roles_text),
+        inline=False
+    )
+    
+    embed.set_footer(
+        text=f"Запрошено: {ctx.author.display_name} | {datetime.now().strftime('%d.%m.%Y %H:%M')}",
+        icon_url=ctx.author.display_avatar.url if ctx.author.display_avatar else None
+    )
+    
+    if bot.user.avatar:
+        embed.set_thumbnail(url=bot.user.avatar.url)
+    
+    await safe_send(ctx, embed=embed)
 
 @bot.event
 async def on_command_error(ctx, error):
