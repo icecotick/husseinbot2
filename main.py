@@ -1676,7 +1676,7 @@ async def check_roblox_friends(ctx, roblox_username: str):
     Пример: !checkfriends Player123
     """
     
-    status_msg = await ctx.send(f"🔍 Получаю список друзей **{roblox_username}**...")
+    status_msg = await ctx.send(f"🔍 Получаю список друзей **{roblox_username}**... Это может занять время")
     
     try:
         # Получаем ID пользователя
@@ -1691,12 +1691,38 @@ async def check_roblox_friends(ctx, roblox_username: str):
             await status_msg.edit(content=None, embed=embed)
             return
         
-        # Получаем список друзей
-        await status_msg.edit(content=f"🔍 Анализирую друзей **{roblox_username}**... (может занять время)")
+        # Получаем список друзей (теперь без ограничения)
+        await status_msg.edit(content=f"🔍 Получаю список друзей **{roblox_username}**... (это может занять 10-30 секунд)")
         
-        friends = await get_user_friends(user_id)
+        # Функция для получения всех друзей через курсор (пагинация)
+        all_friends = []
+        cursor = ""
         
-        if not friends:
+        async with aiohttp.ClientSession() as session:
+            while True:
+                url = f"https://friends.roblox.com/v1/users/{user_id}/friends"
+                if cursor:
+                    url += f"?cursor={cursor}"
+                
+                async with session.get(url) as resp:
+                    if resp.status != 200:
+                        break
+                    
+                    data = await resp.json()
+                    friends_batch = data.get('data', [])
+                    all_friends.extend(friends_batch)
+                    
+                    # Проверяем, есть ли следующая страница
+                    cursor = data.get('nextPageCursor')
+                    if not cursor:
+                        break
+                    
+                    # Небольшая задержка чтобы не забанили за спам
+                    await asyncio.sleep(0.5)
+        
+        total_friends = len(all_friends)
+        
+        if total_friends == 0:
             embed = discord.Embed(
                 title="👥 Нет друзей",
                 description=f"У **{roblox_username}** нет друзей или они скрыты",
@@ -1705,11 +1731,13 @@ async def check_roblox_friends(ctx, roblox_username: str):
             await status_msg.edit(content=None, embed=embed)
             return
         
+        # Обновляем статус
+        await status_msg.edit(content=f"🔍 Анализирую {total_friends} друзей **{roblox_username}**...")
+        
         # Проверяем каждого друга
         enemies_found = []
-        checked = 0
         
-        for friend in friends[:50]:  # Ограничим 50 друзьями для скорости
+        for friend in all_friends:
             friend_name = friend.get('name', '')
             friend_display = friend.get('displayName', '')
             
@@ -1724,8 +1752,6 @@ async def check_roblox_friends(ctx, roblox_username: str):
                     'id': friend.get('id', '?'),
                     'tag': tag_name or tag_display
                 })
-            
-            checked += 1
         
         # Формируем результат
         if enemies_found:
@@ -1735,16 +1761,17 @@ async def check_roblox_friends(ctx, roblox_username: str):
                 color=COLORS['error']
             )
             
-            for enemy in enemies_found[:10]:  # Показываем первых 10
-                name = enemy['display'] if enemy['display'] != enemy['name'] else enemy['name']
+            # Показываем первых 15 врагов
+            for enemy in enemies_found[:15]:
+                name = enemy['display'] if enemy['display'] and enemy['display'] != enemy['name'] else enemy['name']
                 embed.add_field(
                     name=name,
                     value=f"ID: {enemy['id']} | Тег: {enemy['tag']}",
                     inline=False
                 )
             
-            if len(enemies_found) > 10:
-                embed.set_footer(text=f"и ещё {len(enemies_found) - 10} врагов...")
+            if len(enemies_found) > 15:
+                embed.set_footer(text=f"и ещё {len(enemies_found) - 15} врагов...")
             
         else:
             embed = discord.Embed(
@@ -1755,17 +1782,32 @@ async def check_roblox_friends(ctx, roblox_username: str):
         
         embed.add_field(
             name="📊 Статистика",
-            value=f"Проверено друзей: **{checked}**",
+            value=f"Всего друзей: **{total_friends}**\nПроверено: **{total_friends}**",
             inline=False
         )
         
         await status_msg.edit(content=None, embed=embed)
         
+    except aiohttp.ClientError as e:
+        logger.error(f"Ошибка сети при проверке друзей: {e}")
+        embed = discord.Embed(
+            title="❌ Ошибка сети",
+            description="Не удалось подключиться к Roblox API. Попробуйте позже.",
+            color=COLORS['error']
+        )
+        await status_msg.edit(content=None, embed=embed)
+    except asyncio.TimeoutError:
+        embed = discord.Embed(
+            title="❌ Таймаут",
+            description="Слишком долгий ответ от Roblox API. Попробуйте позже.",
+            color=COLORS['error']
+        )
+        await status_msg.edit(content=None, embed=embed)
     except Exception as e:
         logger.error(f"Ошибка проверки друзей: {e}")
         embed = discord.Embed(
             title="❌ Ошибка",
-            description=f"Не удалось проверить друзей: {str(e)[:100]}",
+            description=f"Не удалось проверить друзей. Попробуйте позже.",
             color=COLORS['error']
         )
         await status_msg.edit(content=None, embed=embed)
