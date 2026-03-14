@@ -29,7 +29,8 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = os.getenv('BOT_PREFIX', '!')
 ADMIN_ROLE_IDS = [int(role_id.strip()) for role_id in os.getenv('ADMIN_ROLE_IDS', '').split(',') if role_id.strip()]
 DATABASE_URL = os.getenv('DATABASE_URL')
-
+# ID ролей модераторов (которые могут использовать модераторские команды)
+MOD_ROLE_IDS = [int(role_id.strip()) for role_id in os.getenv('MOD_ROLE_IDS', '').split(',') if role_id.strip()]
 # Автоматическое определение порта для Render
 PORT = int(os.getenv('PORT', '10000'))
 
@@ -1270,6 +1271,44 @@ def is_admin():
             return True
         author_role_ids = [role.id for role in ctx.author.roles]
         return any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS)
+    return commands.check(predicate)
+
+def is_mod():
+    """Проверка, является ли пользователь модератором"""
+    async def predicate(ctx):
+        # Проверка прав администратора Discord
+        if ctx.author.guild_permissions.administrator:
+            return True
+        
+        # Проверка кастомных админских ролей
+        author_role_ids = [role.id for role in ctx.author.roles]
+        if any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS):
+            return True
+        
+        # Проверка модераторских ролей
+        if any(mod_role_id in author_role_ids for mod_role_id in MOD_ROLE_IDS):
+            return True
+        
+        return False
+    return commands.check(predicate)
+
+def is_admin_or_mod():
+    """Проверка, является ли пользователь администратором или модератором"""
+    async def predicate(ctx):
+        # Проверка прав администратора Discord
+        if ctx.author.guild_permissions.administrator:
+            return True
+        
+        # Проверка кастомных админских ролей
+        author_role_ids = [role.id for role in ctx.author.roles]
+        if any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS):
+            return True
+        
+        # Проверка модераторских ролей
+        if any(mod_role_id in author_role_ids for mod_role_id in MOD_ROLE_IDS):
+            return True
+        
+        return False
     return commands.check(predicate)
 
 async def check_and_assign_roles(member: discord.Member):
@@ -2999,7 +3038,7 @@ async def lock_channels(ctx, role: discord.Role, lock_type: str = "send"):
     await safe_edit(message, embed=final_embed)
 
 @bot.command(name='unlockchannels')
-@is_admin()
+@is_admin_or_mod()
 async def unlock_channels(ctx, role: Optional[discord.Role] = None):
     if role:
         embed = discord.Embed(
@@ -3058,7 +3097,7 @@ async def unlock_channels(ctx, role: Optional[discord.Role] = None):
     await safe_edit(message, embed=final_embed)
 
 @bot.command(name='clearlocks')
-@is_admin()
+@is_admin_or_mod()
 async def clear_locks(ctx):
     locks = await db.get_channel_locks(ctx.guild.id)
     
@@ -3133,7 +3172,7 @@ async def clear_locks(ctx):
     await safe_send(ctx, embed=embed, view=view)
 
 @bot.command(name='lockinfo')
-@is_admin()
+@is_admin_or_mod()
 async def lock_info(ctx):
     locks = await db.get_channel_locks(ctx.guild.id)
     
@@ -3602,7 +3641,7 @@ async def raid_command(ctx, clan: str, link: str):
 last_locked_role = {}
 
 @bot.command(name='lockrole')
-@is_admin()
+@is_admin_or_mod()
 async def lockrole_command(ctx, role: discord.Role):
     global last_locked_role
     last_locked_role[ctx.guild.id] = role.id
@@ -3625,7 +3664,7 @@ async def lockrole_command(ctx, role: discord.Role):
     await safe_send(ctx, embed=embed)
 
 @bot.command(name='unlock')
-@is_admin()
+@is_admin_or_mod()
 async def unlock_command(ctx):
     global last_locked_role
     
@@ -3708,7 +3747,7 @@ async def unlock_command(ctx):
     await safe_edit(message, embed=final_embed)
 
 @bot.command(name='lock')
-@is_admin()
+@is_admin_or_mod()
 async def lock_command(ctx, lock_type: str = "send"):
     global last_locked_role
     
@@ -5460,9 +5499,546 @@ async def check_expired_vouches():
         
         await asyncio.sleep(60)
 
-# ========== КОМАНДА HELP ==========
+# ========== СИСТЕМА ВЕРИФИКАЦИИ РОЛЕЙ ==========
+
+# Хранилище настроек верификации для каждого сервера
+# {guild_id: {"verify_role_id": int, "unverify_role_id": int}}
+verify_settings = {}
+
+@bot.command(name='verifyrole')
+@is_admin()
+async def set_verify_roles(ctx, verify_role: discord.Role, unverify_role: discord.Role):
+    """
+    Установить роли для системы верификации
+    
+    Пример: !verifyrole @Верифицирован @Неверифицирован
+    
+    Первая роль - будет выдаваться при !verify
+    Вторая роль - будет сниматься при !verify
+    """
+    global verify_settings
+    
+    # Сохраняем ID ролей для этого сервера
+    verify_settings[ctx.guild.id] = {
+        "verify_role_id": verify_role.id,
+        "unverify_role_id": unverify_role.id
+    }
+    
+    embed = discord.Embed(
+        title="✅ Роли верификации установлены",
+        description=f"Теперь команда `!verify` будет работать с этими ролями:",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(
+        name="📌 Выдаваемая роль",
+        value=verify_role.mention,
+        inline=True
+    )
+    
+    embed.add_field(
+        name="🗑️ Снимаемая роль",
+        value=unverify_role.mention,
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📋 Пример использования",
+        value=f"`{PREFIX}verify @пользователь`",
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
 
 
+@bot.command(name='clearverifyroles')
+@is_admin()
+async def unset_verify_roles(ctx):
+    """
+    Сбросить настройки верификации на сервере
+    """
+    global verify_settings
+    
+    if ctx.guild.id not in verify_settings:
+        embed = discord.Embed(
+            title="ℹ️ Роли не настроены",
+            description="На этом сервере не настроены роли верификации.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Удаляем настройки
+    del verify_settings[ctx.guild.id]
+    
+    embed = discord.Embed(
+        title="✅ Настройки сброшены",
+        description="Роли верификации удалены. Теперь команда `!verify` не будет работать до новой настройки.",
+        color=COLORS['success']
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+
+@bot.command(name='verify')
+@is_admin_or_mod()
+async def verify_user(ctx, member: discord.Member):
+    """
+    Верифицировать пользователя (выдать verify роль и снять unverify)
+    
+    Пример: !verify @user
+    """
+    global verify_settings
+    
+    # Проверяем, настроены ли роли на этом сервере
+    if ctx.guild.id not in verify_settings:
+        embed = discord.Embed(
+            title="❌ Роли не настроены",
+            description=f"Сначала используйте `{PREFIX}verifyrole @роль1 @роль2` чтобы установить роли верификации.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    settings = verify_settings[ctx.guild.id]
+    verify_role_id = settings["verify_role_id"]
+    unverify_role_id = settings["unverify_role_id"]
+    
+    # Получаем объекты ролей
+    verify_role = ctx.guild.get_role(verify_role_id)
+    unverify_role = ctx.guild.get_role(unverify_role_id)
+    
+    if not verify_role:
+        embed = discord.Embed(
+            title="❌ Роль не найдена",
+            description=f"Роль для верификации (ID: {verify_role_id}) больше не существует на сервере.\n"
+                       f"Используйте `{PREFIX}verifyrole` чтобы настроить заново.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    if not unverify_role:
+        embed = discord.Embed(
+            title="❌ Роль не найдена",
+            description=f"Роль для снятия (ID: {unverify_role_id}) больше не существует на сервере.\n"
+                       f"Используйте `{PREFIX}verifyrole` чтобы настроить заново.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Проверяем права бота
+    if not ctx.guild.me.guild_permissions.manage_roles:
+        embed = discord.Embed(
+            title="❌ Недостаточно прав",
+            description="У бота нет прав на управление ролями!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Проверяем иерархию ролей (роль бота должна быть выше)
+    if verify_role.position >= ctx.guild.me.top_role.position:
+        embed = discord.Embed(
+            title="❌ Ошибка иерархии",
+            description=f"Роль {verify_role.mention} находится выше или на том же уровне, что и роль бота.\n"
+                       f"Переместите роль бота выше в списке ролей.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    results = []
+    errors = []
+    
+    # Снимаем unverify роль (если есть)
+    if unverify_role in member.roles:
+        try:
+            await member.remove_roles(unverify_role, reason=f"Верификация пользователя (админ: {ctx.author})")
+            results.append(f"✅ Снята роль {unverify_role.mention}")
+        except discord.Forbidden:
+            errors.append(f"❌ Нет прав для снятия роли {unverify_role.mention}")
+        except Exception as e:
+            errors.append(f"❌ Ошибка при снятии роли: {str(e)[:50]}")
+    else:
+        results.append(f"ℹ️ У пользователя нет роли {unverify_role.mention}")
+    
+    # Выдаем verify роль (если ещё нет)
+    if verify_role not in member.roles:
+        try:
+            await member.add_roles(verify_role, reason=f"Верификация пользователя (админ: {ctx.author})")
+            results.append(f"✅ Выдана роль {verify_role.mention}")
+        except discord.Forbidden:
+            errors.append(f"❌ Нет прав для выдачи роли {verify_role.mention}")
+        except Exception as e:
+            errors.append(f"❌ Ошибка при выдаче роли: {str(e)[:50]}")
+    else:
+        results.append(f"ℹ️ У пользователя уже есть роль {verify_role.mention}")
+    
+    # Создаем embed с результатом
+    embed = discord.Embed(
+        title="🔐 Верификация пользователя",
+        description=f"**Пользователь:** {member.mention}\n**Админ:** {ctx.author.mention}",
+        color=COLORS['success'] if not errors else COLORS['warning']
+    )
+    
+    if results:
+        embed.add_field(
+            name="📋 Результаты",
+            value="\n".join(results),
+            inline=False
+        )
+    
+    if errors:
+        embed.add_field(
+            name="❌ Ошибки",
+            value="\n".join(errors),
+            inline=False
+        )
+    
+    await safe_send(ctx, embed=embed)
+
+
+@bot.command(name='verifyinfo')
+@is_admin_or_mod()
+async def verify_info(ctx):
+    """
+    Показать текущие настройки верификации на сервере
+    """
+    global verify_settings
+    
+    if ctx.guild.id not in verify_settings:
+        embed = discord.Embed(
+            title="ℹ️ Настройки верификации",
+            description=f"На этом сервере не настроены роли верификации.\n"
+                       f"Используйте `{PREFIX}verifyrole @роль1 @роль2` чтобы настроить.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    settings = verify_settings[ctx.guild.id]
+    verify_role = ctx.guild.get_role(settings["verify_role_id"])
+    unverify_role = ctx.guild.get_role(settings["unverify_role_id"])
+    
+    embed = discord.Embed(
+        title="🔐 Настройки верификации",
+        color=COLORS['info']
+    )
+    
+    embed.add_field(
+        name="✅ Verify роль",
+        value=verify_role.mention if verify_role else f"Роль не найдена (ID: {settings['verify_role_id']})",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="❌ Unverify роль",
+        value=unverify_role.mention if unverify_role else f"Роль не найдена (ID: {settings['unverify_role_id']})",
+        inline=True
+    )
+    
+    embed.add_field(
+        name="📋 Команды",
+        value=f"`{PREFIX}verify @user` - верифицировать\n"
+              f"`{PREFIX}unverifyrole` - сбросить настройки",
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+    
+    # Получаем всех пользователей с указанной ролью
+    members_with_role = [m for m in ctx.guild.members if role in m.roles]
+    
+    if not members_with_role:
+        embed = discord.Embed(
+            title="ℹ️ Нет пользователей",
+            description=f"Нет пользователей с ролью {role.mention}",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="⏳ Массовая верификация",
+        description=f"Начинаю верификацию **{len(members_with_role)}** пользователей...",
+        color=COLORS['warning']
+    )
+    
+    message = await safe_send(ctx, embed=embed)
+    
+    success = 0
+    failed = 0
+    
+    for member in members_with_role:
+        try:
+            # Снимаем unverify роль (текущую)
+            await member.remove_roles(role, reason=f"Массовая верификация (админ: {ctx.author})")
+            # Выдаем verify роль
+            await member.add_roles(verify_role, reason=f"Массовая верификация (админ: {ctx.author})")
+            success += 1
+        except:
+            failed += 1
+        
+        # Небольшая задержка чтобы не забанили за спам
+        await asyncio.sleep(0.5)
+    
+    final_embed = discord.Embed(
+        title="✅ Массовая верификация завершена",
+        color=COLORS['success'] if failed == 0 else COLORS['warning']
+    )
+    
+    final_embed.add_field(
+        name="📊 Результаты",
+        value=f"✅ Успешно: {success}\n❌ Ошибок: {failed}",
+        inline=False
+    )
+    
+    if message:
+        await safe_edit(message, embed=final_embed)
+    else:
+        await safe_send(ctx, embed=final_embed)
+
+@bot.command(name='addmodrole')
+@is_admin()
+async def add_mod_role(ctx, role: discord.Role):
+    """Добавить роль в список модераторских ролей"""
+    global MOD_ROLE_IDS
+    
+    if role.id in MOD_ROLE_IDS:
+        embed = discord.Embed(
+            title="⚠️ Роль уже в списке",
+            description=f"Роль {role.mention} уже есть в списке модераторских ролей!",
+            color=COLORS['warning']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    MOD_ROLE_IDS.append(role.id)
+    
+    # Сохраняем в .env файл
+    try:
+        env_path = '.env'
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+            
+            mod_roles_str = ','.join(str(id) for id in MOD_ROLE_IDS)
+            found = False
+            for i, line in enumerate(lines):
+                if line.startswith('MOD_ROLE_IDS='):
+                    lines[i] = f'MOD_ROLE_IDS={mod_roles_str}\n'
+                    found = True
+                    break
+            
+            if not found:
+                lines.append(f'MOD_ROLE_IDS={mod_roles_str}\n')
+            
+            with open(env_path, 'w') as f:
+                f.writelines(lines)
+            
+            load_dotenv(override=True)
+    except Exception as e:
+        logger.warning(f"Не удалось обновить .env файл: {e}")
+    
+    embed = discord.Embed(
+        title="✅ Модераторская роль добавлена",
+        description=f"Роль {role.mention} добавлена в список модераторских ролей!",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(
+        name="📊 Текущие модераторские роли",
+        value="\n".join([f"• <@&{role_id}>" for role_id in MOD_ROLE_IDS]) or "Нет ролей",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"Всего ролей: {len(MOD_ROLE_IDS)}")
+    
+    await safe_send(ctx, embed=embed)
+
+
+@bot.command(name='removemodrole')
+@is_admin()
+async def remove_mod_role(ctx, role: discord.Role):
+    """Удалить роль из списка модераторских ролей"""
+    global MOD_ROLE_IDS
+    
+    if role.id not in MOD_ROLE_IDS:
+        embed = discord.Embed(
+            title="❌ Роль не найдена",
+            description=f"Роль {role.mention} не найдена в списке модераторских ролей!",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    MOD_ROLE_IDS.remove(role.id)
+    
+    # Сохраняем в .env файл
+    try:
+        env_path = '.env'
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+            
+            mod_roles_str = ','.join(str(id) for id in MOD_ROLE_IDS)
+            for i, line in enumerate(lines):
+                if line.startswith('MOD_ROLE_IDS='):
+                    lines[i] = f'MOD_ROLE_IDS={mod_roles_str}\n'
+                    break
+            
+            with open(env_path, 'w') as f:
+                f.writelines(lines)
+            
+            load_dotenv(override=True)
+    except Exception as e:
+        logger.warning(f"Не удалось обновить .env файл: {e}")
+    
+    embed = discord.Embed(
+        title="✅ Модераторская роль удалена",
+        description=f"Роль {role.mention} удалена из списка модераторских ролей!",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(
+        name="📊 Текущие модераторские роли",
+        value="\n".join([f"• <@&{role_id}>" for role_id in MOD_ROLE_IDS]) or "Нет ролей",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"Всего ролей: {len(MOD_ROLE_IDS)}")
+    
+    await safe_send(ctx, embed=embed)
+
+
+@bot.command(name='listmodroles')
+async def list_mod_roles(ctx):
+    """Показать список всех модераторских ролей"""
+    
+    if not MOD_ROLE_IDS:
+        embed = discord.Embed(
+            title="📋 Список модераторских ролей",
+            description="В данный момент нет назначенных модераторских ролей.\n"
+                       f"Используйте `{PREFIX}addmodrole @роль` чтобы добавить роль.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Список модераторских ролей",
+        description=f"Всего ролей: **{len(MOD_ROLE_IDS)}**",
+        color=COLORS['info']
+    )
+    
+    roles_info = []
+    for role_id in MOD_ROLE_IDS:
+        role = ctx.guild.get_role(role_id)
+        if role:
+            roles_info.append(f"• {role.mention} (ID: `{role_id}`)")
+        else:
+            roles_info.append(f"• Роль с ID `{role_id}` (не найдена на сервере)")
+    
+    embed.add_field(
+        name="🎭 Роли",
+        value="\n".join(roles_info) if roles_info else "Нет доступных ролей",
+        inline=False
+    )
+    
+    embed.add_field(
+        name="ℹ️ Информация",
+        value="Владельцы этих ролей имеют доступ к модераторским командам.\n"
+              f"Используйте `{PREFIX}addmodrole @роль` чтобы добавить новую роль.\n"
+              f"Используйте `{PREFIX}removemodrole @роль` чтобы удалить роль.",
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+
+@bot.command(name='clearmodroles')
+@is_admin()
+async def clear_mod_roles(ctx):
+    """Удалить ВСЕ модераторские роли"""
+    global MOD_ROLE_IDS
+    
+    if not MOD_ROLE_IDS:
+        embed = discord.Embed(
+            title="ℹ️ Нет ролей",
+            description="Список модераторских ролей уже пуст!",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Запрашиваем подтверждение
+    embed = discord.Embed(
+        title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
+        description=f"Вы уверены, что хотите удалить ВСЕ модераторские роли (**{len(MOD_ROLE_IDS)}** шт.)?",
+        color=COLORS['error']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        old_count = len(MOD_ROLE_IDS)
+        MOD_ROLE_IDS = []
+        
+        # Обновляем .env файл
+        try:
+            env_path = '.env'
+            if os.path.exists(env_path):
+                with open(env_path, 'r') as f:
+                    lines = f.readlines()
+                
+                for i, line in enumerate(lines):
+                    if line.startswith('MOD_ROLE_IDS='):
+                        lines[i] = 'MOD_ROLE_IDS=\n'
+                        break
+                
+                with open(env_path, 'w') as f:
+                    f.writelines(lines)
+                
+                load_dotenv(override=True)
+        except Exception as e:
+            logger.warning(f"Не удалось обновить .env файл: {e}")
+        
+        confirm_embed = discord.Embed(
+            title="✅ Все модераторские роли удалены",
+            description=f"Удалено {old_count} модераторских ролей.",
+            color=COLORS['success']
+        )
+        await interaction.response.edit_message(embed=confirm_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Удаление отменено",
+            description="Список модераторских ролей не был изменен.",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
 
 # ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
 
