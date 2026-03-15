@@ -2383,6 +2383,7 @@ async def check_oauth_user(ctx, user: discord.User):
     if enemy_servers:
         enemy_text = "\n".join([f"• **{g['name']}**" for g in enemy_servers[:5]])
         if len(enemy_servers) > 5:
+
 @bot.command(name='checkoauth')
 @is_admin_or_mod()
 async def check_oauth_user(ctx, user: discord.User):
