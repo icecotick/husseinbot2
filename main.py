@@ -1606,7 +1606,7 @@ async def on_guild_join(guild):
 # ========== ROBLOX КОМАНДЫ ==========
 
 @bot.command(name='checkroblox')
-@is_admin()
+@is_admin_or_mod()
 async def check_roblox_user(ctx, roblox_username: str):
     """
     Проверить Roblox-пользователя на вражеские приписки
@@ -1707,7 +1707,7 @@ async def check_roblox_user(ctx, roblox_username: str):
         await status_msg.edit(content=None, embed=embed)
 
 @bot.command(name='checkfriends')
-@is_admin()
+@is_admin_or_mod()
 async def check_roblox_friends(ctx, roblox_username: str):
     """
     Проверить ВСЕХ друзей Roblox-пользователя на вражеские приписки
@@ -1915,7 +1915,7 @@ async def list_roblox_tags(ctx):
     await ctx.send(embed=embed)
 
 @bot.command(name='removerobloxtag')
-@is_admin()
+@is_admin_or_mod()
 async def remove_roblox_tag(ctx, tag: str):
     """
     Удалить вражескую приписку из списка
@@ -2313,7 +2313,7 @@ async def oauth_command(ctx):
     await safe_send(ctx, embed=embed)
 
 @bot.command(name='checkoauth')
-@is_admin()
+@is_admin_or_mod()
 async def check_oauth_user(ctx, user: discord.User):
     """
     Проверить данные OAuth2 пользователя (если он авторизовался)
@@ -2383,43 +2383,223 @@ async def check_oauth_user(ctx, user: discord.User):
     if enemy_servers:
         enemy_text = "\n".join([f"• **{g['name']}**" for g in enemy_servers[:5]])
         if len(enemy_servers) > 5:
-            enemy_text += f"\n*... и ещё {len(enemy_servers) - 5}*"
+@bot.command(name='checkoauth')
+@is_admin_or_mod()
+async def check_oauth_user(ctx, user: discord.User):
+    """
+    Проверить данные OAuth2 пользователя (если он авторизовался)
+    Показывает ВСЕ серверы пользователя
+    
+    Пример: !checkoauth @user
+    """
+    data = await db.get_oauth_data(user.id)
+    
+    if not data:
+        embed = discord.Embed(
+            title="❌ Данные не найдены",
+            description=f"Пользователь {user.mention} еще не авторизовался через OAuth2",
+            color=COLORS['error']
+        )
         embed.add_field(
-            name=f"⚠️ ВРАЖЕСКИЕ СЕРВЕРЫ ({len(enemy_servers)})",
-            value=enemy_text,
+            name="📋 Инструкция",
+            value=f"Попросите пользователя перейти по ссылке `{PREFIX}oauth` и авторизоваться",
             inline=False
         )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Парсим сохраненные данные о серверах
+    try:
+        import ast
+        guilds_data = ast.literal_eval(data['guilds_data'])
+        if not isinstance(guilds_data, list):
+            guilds_data = []
+    except:
+        guilds_data = []
+    
+    if not guilds_data:
+        embed = discord.Embed(
+            title="ℹ️ Нет данных о серверах",
+            description=f"У пользователя {user.mention} нет сохраненных серверов",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Анализируем серверы
+    enemy_servers = []
+    ally_servers = []
+    neutral_servers = []
+    other_servers = []
+    
+    # Сортируем серверы по названию
+    sorted_guilds = sorted(guilds_data, key=lambda x: x.get('name', '').lower())
+    
+    for guild in sorted_guilds:
+        guild_id = int(guild.get('id', 0))
+        guild_name = guild.get('name', 'Неизвестно')
+        guild_owner = guild.get('owner', False)
+        
+        server_info = f"{guild_name} ({'👑 Владелец' if guild_owner else 'участник'})"
+        
+        if guild_id in ENEMY_SERVERS.values():
+            enemy_servers.append(server_info)
+        elif guild_id in ALLY_SERVERS.values():
+            ally_servers.append(server_info)
+        elif guild_id in NEUTRAL_SERVERS.values():
+            neutral_servers.append(server_info)
+        else:
+            # Если не нашли по ID, проверяем по названию
+            name_lower = guild_name.lower()
+            if 'enemy' in name_lower or 'враг' in name_lower:
+                enemy_servers.append(f"⚠️ {server_info}")
+            elif 'ally' in name_lower or 'союз' in name_lower:
+                ally_servers.append(f"🤝 {server_info}")
+            elif 'peace' in name_lower or 'нейтр' in name_lower:
+                neutral_servers.append(f"🕊️ {server_info}")
+            else:
+                other_servers.append(server_info)
+    
+    # Создаем embed с результатами
+    embed = discord.Embed(
+        title=f"🔍 OAuth2 данные {user.display_name}",
+        description=f"**Последнее обновление:** {data['last_updated'].strftime('%d.%m.%Y %H:%M')}\n"
+                   f"**Всего серверов:** {len(guilds_data)}",
+        color=COLORS['info']
+    )
+    
+    embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
+    
+    # Функция для добавления поля с серверами (с учетом лимита Discord)
+    def add_server_field(name, servers, emoji):
+        if not servers:
+            return
+        
+        # Discord позволяет максимум 1024 символа в поле
+        server_text = "\n".join(servers)
+        
+        # Если текст слишком длинный, разбиваем на несколько полей
+        if len(server_text) > 1024:
+            # Разбиваем на chunks по 20 серверов
+            chunk_size = 20
+            for i in range(0, len(servers), chunk_size):
+                chunk = servers[i:i+chunk_size]
+                chunk_text = "\n".join(chunk)
+                field_name = f"{emoji} {name} (часть {i//chunk_size + 1})"
+                embed.add_field(
+                    name=field_name,
+                    value=chunk_text[:1024],  # Обрезаем до лимита
+                    inline=False
+                )
+        else:
+            embed.add_field(
+                name=f"{emoji} {name} ({len(servers)})",
+                value=server_text or "Нет серверов",
+                inline=False
+            )
+    
+    # Добавляем все категории
+    if enemy_servers:
+        add_server_field("ВРАЖЕСКИЕ СЕРВЕРЫ", enemy_servers, "⚠️")
     
     if ally_servers:
-        ally_text = "\n".join([f"• **{g['name']}**" for g in ally_servers[:5]])
-        if len(ally_servers) > 5:
-            ally_text += f"\n*... и ещё {len(ally_servers) - 5}*"
-        embed.add_field(
-            name=f"🤝 СОЮЗНЫЕ СЕРВЕРЫ ({len(ally_servers)})",
-            value=ally_text,
-            inline=False
-        )
+        add_server_field("СОЮЗНЫЕ СЕРВЕРЫ", ally_servers, "🤝")
     
     if neutral_servers:
-        neutral_text = "\n".join([f"• **{g['name']}**" for g in neutral_servers[:5]])
-        if len(neutral_servers) > 5:
-            neutral_text += f"\n*... и ещё {len(neutral_servers) - 5}*"
-        embed.add_field(
-            name=f"🕊️ НЕЙТРАЛЬНЫЕ СЕРВЕРЫ ({len(neutral_servers)})",
-            value=neutral_text,
-            inline=False
-        )
+        add_server_field("НЕЙТРАЛЬНЫЕ СЕРВЕРЫ", neutral_servers, "🕊️")
     
     if other_servers:
-        embed.add_field(
-            name=f"📌 ДРУГИЕ СЕРВЕРЫ",
-            value=f"Находится на **{len(other_servers)}** других серверах",
-            inline=False
-        )
+        add_server_field("ДРУГИЕ СЕРВЕРЫ", other_servers, "📌")
     
-    embed.set_footer(text="Для полного списка используйте OAuth2 ссылку")
+    embed.set_footer(text=f"ID: {user.id} | Для полного списка используйте OAuth2 ссылку")
     
     await safe_send(ctx, embed=embed)
+
+
+@bot.command(name='checkoauthfull')
+@is_admin_or_mod()
+async def check_oauth_full(ctx, user: discord.User):
+    """
+    Показать ПОЛНЫЙ список серверов пользователя (в файле, если много)
+    
+    Пример: !checkoauthfull @user
+    """
+    data = await db.get_oauth_data(user.id)
+    
+    if not data:
+        embed = discord.Embed(
+            title="❌ Данные не найдены",
+            description=f"Пользователь {user.mention} еще не авторизовался",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    try:
+        import ast
+        guilds_data = ast.literal_eval(data['guilds_data'])
+    except:
+        guilds_data = []
+    
+    if not guilds_data:
+        await safe_send(ctx, "ℹ️ Нет данных о серверах")
+        return
+    
+    # Сортируем серверы по названию
+    sorted_guilds = sorted(guilds_data, key=lambda x: x.get('name', '').lower())
+    
+    # Если серверов меньше 50, показываем в embed
+    if len(sorted_guilds) <= 50:
+        embed = discord.Embed(
+            title=f"📋 Все серверы {user.display_name}",
+            description=f"Всего: **{len(sorted_guilds)}**",
+            color=COLORS['info']
+        )
+        
+        servers_text = []
+        for guild in sorted_guilds:
+            name = guild.get('name', 'Неизвестно')
+            owner = "👑" if guild.get('owner', False) else ""
+            servers_text.append(f"{owner} {name}")
+        
+        # Разбиваем на несколько полей если нужно
+        chunk_size = 20
+        for i in range(0, len(servers_text), chunk_size):
+            chunk = servers_text[i:i+chunk_size]
+            embed.add_field(
+                name=f"Серверы {i+1}-{i+len(chunk)}",
+                value="\n".join(chunk),
+                inline=False
+            )
+        
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Если серверов больше 50, отправляем файлом
+    filename = f"servers_{user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(f"Список серверов пользователя {user.display_name} (ID: {user.id})\n")
+        f.write(f"Всего серверов: {len(sorted_guilds)}\n")
+        f.write("=" * 50 + "\n\n")
+        
+        for i, guild in enumerate(sorted_guilds, 1):
+            name = guild.get('name', 'Неизвестно')
+            guild_id = guild.get('id', '?')
+            owner = "👑 ВЛАДЕЛЕЦ" if guild.get('owner', False) else "участник"
+            f.write(f"{i}. {name}\n")
+            f.write(f"   ID: {guild_id} | {owner}\n\n")
+    
+    file = discord.File(filename)
+    embed = discord.Embed(
+        title=f"📁 Полный список серверов {user.display_name}",
+        description=f"Всего серверов: **{len(sorted_guilds)}**\nФайл отправлен ниже",
+        color=COLORS['success']
+    )
+    await safe_send(ctx, embed=embed, file=file)
+    
+    # Удаляем временный файл
+    os.remove(filename)
 
 @bot.command(name='refreshoauth')
 async def refresh_oauth_data(ctx):
@@ -2913,7 +3093,7 @@ async def remove_channel(ctx, channel: Optional[discord.TextChannel] = None):
         await safe_send(ctx, embed=embed, view=view)
 
 @bot.command(name='listchannels')
-@is_admin()
+@is_admin_or_mod()
 async def list_channels(ctx):
     channels = await db.get_channel_list(ctx.guild.id)
     
