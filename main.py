@@ -2382,7 +2382,50 @@ async def check_oauth_user(ctx, user: discord.User):
     
     if enemy_servers:
         enemy_text = "\n".join([f"• **{g['name']}**" for g in enemy_servers[:5]])
-        if len(enemy_servers) > 5:
+             if len(enemy_servers) > 5:
+                enemy_text.append(f"*... и ещё {len(enemy_servers) - 5}*")
+            
+            embed.add_field(
+                name=f"⚠️ Враждебные серверы ({len(enemy_servers)})",
+                value="\n".join(enemy_text) if enemy_text else "Нет",
+                inline=False
+            )
+    
+    # Добавляем остальные категории
+    if ally_servers:
+        ally_text = "\n".join([f"• **{g['name']}**" for g in ally_servers[:5]])
+        if len(ally_servers) > 5:
+            ally_text += f"\n*... и ещё {len(ally_servers) - 5}*"
+        
+        embed.add_field(
+            name=f"🤝 Союзные серверы ({len(ally_servers)})",
+            value=ally_text,
+            inline=False
+        )
+    
+    if neutral_servers:
+        neutral_text = "\n".join([f"• **{g['name']}**" for g in neutral_servers[:5]])
+        if len(neutral_servers) > 5:
+            neutral_text += f"\n*... и ещё {len(neutral_servers) - 5}*"
+        
+        embed.add_field(
+            name=f"🕊️ Нейтральные серверы ({len(neutral_servers)})",
+            value=neutral_text,
+            inline=False
+        )
+    
+    if other_servers:
+        other_text = "\n".join([f"• **{g['name']}**" for g in other_servers[:5]])
+        if len(other_servers) > 5:
+            other_text += f"\n*... и ещё {len(other_servers) - 5}*"
+        
+        embed.add_field(
+            name=f"📌 Другие серверы ({len(other_servers)})",
+            value=other_text,
+            inline=False
+        )
+    
+    await safe_send(ctx, embed=embed)
 
 @bot.command(name='checkoauth')
 @is_admin_or_mod()
