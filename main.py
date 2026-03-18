@@ -3,7 +3,7 @@ from discord.ext import commands
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
 import asyncpg
 import asyncio
@@ -13,6 +13,8 @@ import time
 import aiohttp
 import secrets
 from urllib.parse import urlencode
+import json
+import ast
 
 # Настройка логирования
 logging.basicConfig(
@@ -27,17 +29,14 @@ load_dotenv()
 # Настройки бота
 TOKEN = os.getenv('DISCORD_TOKEN')
 PREFIX = os.getenv('BOT_PREFIX', '!')
-ADMIN_ROLE_IDS = [int(role_id.strip()) for role_id in os.getenv('ADMIN_ROLE_IDS', '').split(',') if role_id.strip()]
 DATABASE_URL = os.getenv('DATABASE_URL')
-# ID ролей модераторов (которые могут использовать модераторские команды)
-MOD_ROLE_IDS = [int(role_id.strip()) for role_id in os.getenv('MOD_ROLE_IDS', '').split(',') if role_id.strip()]
 # Автоматическое определение порта для Render
 PORT = int(os.getenv('PORT', '10000'))
 
 # ========== OAuth2 НАСТРОЙКИ ==========
 CLIENT_ID = os.getenv('CLIENT_ID')
 CLIENT_SECRET = os.getenv('CLIENT_SECRET')
-REDIRECT_URI = f"https://husseinbot2.onrender.com/oauth2/callback"  # Исправлено на ваш URL
+REDIRECT_URI = f"https://husseinbot2.onrender.com/oauth2/callback"
 OAUTH2_SCOPES = ["identify", "guilds"]
 oauth_states = {}
 
@@ -76,61 +75,6 @@ GIFS = {
     'peace': 'https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&'
 }
 
-# ========== СПИСКИ СЕРВЕРОВ ==========
-ENEMY_SERVERS = {
-    "Название вражеского сервера 1": 123456789012345678,
-    "Название вражеского сервера 2": 123456789012345679,
-}
-
-ALLY_SERVERS = {
-    "Fantom Destroyers": 1319658857831858317,
-    "Aesar": 1462191913435402342,
-    "Exasperation": 1445074595685076994,
-    "Reborn The Fallen Fantoms": 1453345739034853490,
-    "BRSQ | Barrio Squad": 759339854613315655,
-    "KRISSIS": 1466433357201276961
-    
-}
-
-NEUTRAL_SERVERS = {
-    "Moon Light": 1439693734475464918,
-}
-
-ALL_TRACKED_SERVERS = {}
-ALL_TRACKED_SERVERS.update(ENEMY_SERVERS)
-ALL_TRACKED_SERVERS.update(ALLY_SERVERS)
-ALL_TRACKED_SERVERS.update(NEUTRAL_SERVERS)
-
-# ========== ROBLOX НАСТРОЙКИ ==========
-ENEMY_ROBLOX_TAGS = ["VXRS", "VQS"]
-
-# Настройки ролей для каждого сервера
-GUILD_ROLE_SETTINGS = {}
-GUILD_ROLE_COLORS = {}
-
-# Стандартные настройки для новых серверов
-DEFAULT_ROLE_SETTINGS = {
-    200: 'raider newgen',
-    400: 'raider scout', 
-    800: 'raider striker', 
-    1200: 'raider heavy', 
-    1600: 'raider legend',
-    2400: 'raider who lives on raids', 
-    3200: 'raid moderator', 
-    4000: 'raider commander'
-}
-
-DEFAULT_ROLE_COLORS = {
-    'raider newgen': discord.Color.green(),
-    'raider scout': discord.Color.blue(),
-    'raider striker': discord.Color.orange(),
-    'raider heavy': discord.Color.yellow(),
-    'raider legend': discord.Color.purple(),
-    'raider who lives on raids': discord.Color.blue(),
-    'raid moderator': discord.Color.red(),
-    'raider commander': discord.Color.gold()
-}
-
 # ========== БАЗА ДАННЫХ ==========
 
 class Database:
@@ -149,7 +93,7 @@ class Database:
     
     async def init_tables(self):
         async with self.pool.acquire() as conn:
-            # Таблица пользователей
+            # Таблица пользователей (поинты)
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT,
@@ -210,20 +154,6 @@ class Database:
                 )
             ''')
             
-            # Таблица для ручного добавления врагов
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS manual_enemies (
-                    user_id BIGINT,
-                    guild_id BIGINT,
-                    username TEXT,
-                    server_name TEXT,
-                    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    detected_by BIGINT,
-                    reason TEXT,
-                    PRIMARY KEY (user_id, guild_id)
-                )
-            ''')
-            
             # Таблица для хранения данных OAuth2
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS oauth_data (
@@ -237,18 +167,52 @@ class Database:
                 )
             ''')
             
-            # Таблица для связи Discord и Roblox
+            # ========== НОВЫЕ ТАБЛИЦЫ ДЛЯ НАСТРОЕК СЕРВЕРА ==========
+            
+            # Таблица настроек сервера (отключенные команды, роли и т.д.)
             await conn.execute('''
-                CREATE TABLE IF NOT EXISTS roblox_links (
-                    discord_id BIGINT PRIMARY KEY,
-                    roblox_id BIGINT,
-                    roblox_username TEXT,
-                    linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_checked TIMESTAMP
+                CREATE TABLE IF NOT EXISTS guild_settings (
+                    guild_id BIGINT PRIMARY KEY,
+                    disabled_commands TEXT DEFAULT '[]',
+                    mod_role_ids TEXT DEFAULT '[]',
+                    verify_role_id BIGINT,
+                    unverify_role_id BIGINT,
+                    default_lock_role_id BIGINT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_by BIGINT
+                )
+            ''')
+            
+            # Таблица логов действий
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS action_logs (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT,
+                    user_id BIGINT,
+                    action TEXT,
+                    details TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Таблица кланов
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS clans (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT,
+                    name TEXT NOT NULL,
+                    tag TEXT,
+                    clan_type TEXT NOT NULL CHECK (clan_type IN ('ally', 'enemy', 'peace')),
+                    description TEXT,
+                    added_by BIGINT,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(guild_id, name, clan_type)
                 )
             ''')
             
             logger.info("✅ Все таблицы инициализированы")
+    
+    # ========== МЕТОДЫ ДЛЯ ПОИНТОВ ==========
     
     async def get_user_points(self, user_id: int, guild_id: int) -> int:
         async with self.pool.acquire() as conn:
@@ -353,7 +317,8 @@ class Database:
             await conn.execute('DELETE FROM users WHERE guild_id = $1', guild_id)
             await conn.execute('DELETE FROM transactions WHERE guild_id = $1', guild_id)
     
-    # Методы для списка каналов
+    # ========== МЕТОДЫ ДЛЯ СПИСКА КАНАЛОВ ==========
+    
     async def add_channel_to_list(self, guild_id: int, channel_id: int, channel_name: str, added_by: int):
         async with self.pool.acquire() as conn:
             try:
@@ -401,7 +366,8 @@ class Database:
             )
             return result['count'] if result else 0
     
-    # Методы для блокировок
+    # ========== МЕТОДЫ ДЛЯ БЛОКИРОВОК ==========
+    
     async def add_channel_lock(self, guild_id: int, channel_id: int, role_id: int, lock_type: str, created_by: int):
         async with self.pool.acquire() as conn:
             try:
@@ -451,7 +417,8 @@ class Database:
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM locked_channels WHERE guild_id = $1', guild_id)
     
-    # Методы для ролей
+    # ========== МЕТОДЫ ДЛЯ РОЛЕЙ ЗА ПОИНТЫ ==========
+    
     async def save_role_settings(self, guild_id: int, role_settings: dict, role_colors: dict):
         async with self.pool.acquire() as conn:
             await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
@@ -480,29 +447,6 @@ class Database:
             
             return role_settings, role_colors
     
-    # Методы для ручного добавления врагов
-    async def add_manual_enemy(self, user_id: int, guild_id: int, username: str, server_name: str, detected_by: int, reason: str):
-        async with self.pool.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO manual_enemies (user_id, guild_id, username, server_name, detected_by, reason)
-                VALUES ($1, $2, $3, $4, $5, $6)
-                ON CONFLICT (user_id, guild_id) 
-                DO UPDATE SET reason = CONCAT(manual_enemies.reason, ' | ', EXCLUDED.reason),
-                             detected_at = CURRENT_TIMESTAMP
-            ''', user_id, guild_id, username, server_name, detected_by, reason)
-    
-    async def check_manual_enemy(self, user_id: int):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch('SELECT * FROM manual_enemies WHERE user_id = $1 ORDER BY detected_at DESC', user_id)
-    
-    async def get_all_manual_enemies(self, limit: int = 20, offset: int = 0):
-        async with self.pool.acquire() as conn:
-            return await conn.fetch('SELECT * FROM manual_enemies ORDER BY detected_at DESC LIMIT $1 OFFSET $2', limit, offset)
-    
-    async def count_manual_enemies(self):
-        async with self.pool.acquire() as conn:
-            return await conn.fetchval('SELECT COUNT(*) FROM manual_enemies')
-    
     # ========== МЕТОДЫ ДЛЯ OAuth2 ==========
     
     async def save_oauth_data(self, user_id: int, username: str, access_token: str, refresh_token: str, expires_in: int, guilds_data: list):
@@ -523,115 +467,138 @@ class Database:
         async with self.pool.acquire() as conn:
             return await conn.fetchrow('SELECT * FROM oauth_data WHERE user_id = $1', user_id)
     
-    # ========== МЕТОДЫ ДЛЯ ROBLOX ==========
+    # ========== НОВЫЕ МЕТОДЫ ДЛЯ НАСТРОЕК СЕРВЕРА ==========
     
-    async def link_roblox(self, discord_id: int, roblox_id: int, roblox_username: str):
+    async def get_guild_settings(self, guild_id: int):
+        """Получить настройки сервера"""
         async with self.pool.acquire() as conn:
-            await conn.execute('''
-                INSERT INTO roblox_links (discord_id, roblox_id, roblox_username, last_checked)
-                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
-                ON CONFLICT (discord_id) DO UPDATE 
-                SET roblox_id = EXCLUDED.roblox_id,
-                    roblox_username = EXCLUDED.roblox_username,
-                    last_checked = CURRENT_TIMESTAMP
-            ''', discord_id, roblox_id, roblox_username)
+            result = await conn.fetchrow(
+                'SELECT * FROM guild_settings WHERE guild_id = $1',
+                guild_id
+            )
+            
+            if not result:
+                # Создаем настройки по умолчанию
+                default_settings = {
+                    'guild_id': guild_id,
+                    'disabled_commands': '[]',
+                    'mod_role_ids': '[]',
+                    'verify_role_id': None,
+                    'unverify_role_id': None,
+                    'default_lock_role_id': None
+                }
+                await conn.execute('''
+                    INSERT INTO guild_settings 
+                    (guild_id, disabled_commands, mod_role_ids, verify_role_id, unverify_role_id, default_lock_role_id)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                ''', guild_id, '[]', '[]', None, None, None)
+                return default_settings
+            
+            return dict(result)
     
-    async def get_roblox_link(self, discord_id: int):
+    async def update_guild_settings(self, guild_id: int, settings: dict, updated_by: int):
+        """Обновить настройки сервера"""
         async with self.pool.acquire() as conn:
-            return await conn.fetchrow('SELECT * FROM roblox_links WHERE discord_id = $1', discord_id)
-
-# ========== ROBLOX ФУНКЦИИ ==========
-
-async def check_roblox_username(username: str):
-    """Проверяет наличие вражеских приписок в нике"""
-    if not username:
-        return False, None
-    
-    username_lower = username.lower()
-    
-    for tag in ENEMY_ROBLOX_TAGS:
-        tag_lower = tag.lower()
-        if tag_lower in username_lower:
-            return True, tag
-    return False, None
-
-async def get_roblox_user_id(username: str):
-    """Получить Roblox ID по имени"""
-    if not username:
-        return None
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://users.roblox.com/v1/usernames/users",
-                json={"usernames": [username], "excludeBannedUsers": False}
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    if data and 'data' in data and len(data['data']) > 0:
-                        return data['data'][0]['id']
-                elif resp.status == 429:
-                    logger.error("Roblox API rate limit exceeded")
-                    return None
-                else:
-                    logger.error(f"Roblox API error: {resp.status}")
-                    return None
-        return None
-    except asyncio.TimeoutError:
-        logger.error("Roblox API timeout")
-        return None
-    except Exception as e:
-        logger.error(f"Ошибка получения Roblox ID: {e}")
-        return None
-
-async def get_user_friends(user_id: int):
-    """Получить список друзей пользователя"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://friends.roblox.com/v1/users/{user_id}/friends") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get('data', [])
-        return []
-    except Exception as e:
-        logger.error(f"Ошибка получения друзей: {e}")
-        return []
-
-async def get_user_groups(user_id: int):
-    """Получить группы пользователя"""
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://groups.roblox.com/v1/users/{user_id}/groups/roles") as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    return data.get('data', [])
-        return []
-    except Exception as e:
-        logger.error(f"Ошибка получения групп: {e}")
-        return []
-
-# ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
-
-class ClanManager:
-    def __init__(self, pool):
-        self.pool = pool
-    
-    async def init_tables(self):
-        async with self.pool.acquire() as conn:
-            await conn.execute('''
-                CREATE TABLE IF NOT EXISTS clans (
-                    id SERIAL PRIMARY KEY,
-                    guild_id BIGINT,
-                    name TEXT NOT NULL,
-                    tag TEXT,
-                    clan_type TEXT NOT NULL CHECK (clan_type IN ('ally', 'enemy', 'peace')),
-                    description TEXT,
-                    added_by BIGINT,
-                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(guild_id, name, clan_type)
+            # Проверяем существование
+            exists = await conn.fetchval(
+                'SELECT 1 FROM guild_settings WHERE guild_id = $1',
+                guild_id
+            )
+            
+            if exists:
+                # Обновляем существующие
+                await conn.execute('''
+                    UPDATE guild_settings 
+                    SET disabled_commands = $1,
+                        mod_role_ids = $2,
+                        verify_role_id = $3,
+                        unverify_role_id = $4,
+                        default_lock_role_id = $5,
+                        updated_at = CURRENT_TIMESTAMP,
+                        updated_by = $6
+                    WHERE guild_id = $7
+                ''', 
+                    settings.get('disabled_commands', '[]'),
+                    settings.get('mod_role_ids', '[]'),
+                    settings.get('verify_role_id'),
+                    settings.get('unverify_role_id'),
+                    settings.get('default_lock_role_id'),
+                    updated_by,
+                    guild_id
                 )
-            ''')
-            logger.info("✅ Таблицы кланов инициализированы")
+            else:
+                # Создаем новые
+                await conn.execute('''
+                    INSERT INTO guild_settings 
+                    (guild_id, disabled_commands, mod_role_ids, verify_role_id, unverify_role_id, default_lock_role_id, updated_by)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                ''',
+                    guild_id,
+                    settings.get('disabled_commands', '[]'),
+                    settings.get('mod_role_ids', '[]'),
+                    settings.get('verify_role_id'),
+                    settings.get('unverify_role_id'),
+                    settings.get('default_lock_role_id'),
+                    updated_by
+                )
+            
+            return True
+    
+    async def is_command_disabled(self, guild_id: int, command_name: str) -> bool:
+        """Проверить, отключена ли команда на сервере"""
+        settings = await self.get_guild_settings(guild_id)
+        disabled = json.loads(settings.get('disabled_commands', '[]'))
+        return command_name in disabled
+    
+    async def get_mod_role_ids(self, guild_id: int) -> List[int]:
+        """Получить ID модераторских ролей для сервера"""
+        settings = await self.get_guild_settings(guild_id)
+        return json.loads(settings.get('mod_role_ids', '[]'))
+    
+    async def get_verify_roles(self, guild_id: int):
+        """Получить роли верификации для сервера"""
+        settings = await self.get_guild_settings(guild_id)
+        return {
+            'verify_role_id': settings.get('verify_role_id'),
+            'unverify_role_id': settings.get('unverify_role_id')
+        }
+    
+    async def get_default_lock_role(self, guild_id: int):
+        """Получить роль по умолчанию для блокировки"""
+        settings = await self.get_guild_settings(guild_id)
+        return settings.get('default_lock_role_id')
+    
+    # ========== МЕТОДЫ ДЛЯ ЛОГОВ ==========
+    
+    async def add_action_log(self, guild_id: int, user_id: int, action: str, details: str = None):
+        """Добавить запись в лог действий"""
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO action_logs (guild_id, user_id, action, details)
+                VALUES ($1, $2, $3, $4)
+            ''', guild_id, user_id, action, details)
+    
+    async def get_action_logs(self, guild_id: int, limit: int = 100, offset: int = 0):
+        """Получить логи действий для сервера"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT * FROM action_logs 
+                WHERE guild_id = $1 
+                ORDER BY timestamp DESC 
+                LIMIT $2 OFFSET $3
+            ''', guild_id, limit, offset)
+    
+    async def get_user_action_logs(self, guild_id: int, user_id: int, limit: int = 50):
+        """Получить логи действий конкретного пользователя"""
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT * FROM action_logs 
+                WHERE guild_id = $1 AND user_id = $2
+                ORDER BY timestamp DESC 
+                LIMIT $3
+            ''', guild_id, user_id, limit)
+    
+    # ========== МЕТОДЫ ДЛЯ КЛАНОВ ==========
     
     async def add_clan(self, guild_id: int, name: str, clan_type: str, tag: str = None, description: str = None, added_by: int = None):
         async with self.pool.acquire() as conn:
@@ -775,16 +742,323 @@ class ClanManager:
         }
         return emojis.get(clan_type, '📌')
 
-# Вспомогательная функция для получения настроек сервера
-def get_guild_settings(guild_id: int):
-    if guild_id not in GUILD_ROLE_SETTINGS:
-        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
-        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
-    return GUILD_ROLE_SETTINGS[guild_id], GUILD_ROLE_COLORS[guild_id]
+# Стандартные настройки для новых серверов
+DEFAULT_ROLE_SETTINGS = {
+    200: 'raider newgen',
+    400: 'raider scout', 
+    800: 'raider striker', 
+    1200: 'raider heavy', 
+    1600: 'raider legend',
+    2400: 'raider who lives on raids', 
+    3200: 'raid moderator', 
+    4000: 'raider commander'
+}
 
-# Создаем экземпляры
+DEFAULT_ROLE_COLORS = {
+    'raider newgen': discord.Color.green(),
+    'raider scout': discord.Color.blue(),
+    'raider striker': discord.Color.orange(),
+    'raider heavy': discord.Color.yellow(),
+    'raider legend': discord.Color.purple(),
+    'raider who lives on raids': discord.Color.blue(),
+    'raid moderator': discord.Color.red(),
+    'raider commander': discord.Color.gold()
+}
+
+# Глобальные переменные для настроек
+GUILD_ROLE_SETTINGS = {}
+GUILD_ROLE_COLORS = {}
+last_locked_role = {}
+
+# Создаем экземпляр БД
 db = Database()
-clan_manager = None
+
+# ========== ПРОВЕРКИ ПРАВ ==========
+
+def is_admin():
+    """Проверка, является ли пользователь администратором сервера"""
+    async def predicate(ctx):
+        # Проверка прав администратора Discord
+        if ctx.author.guild_permissions.administrator:
+            return True
+        
+        # Проверка кастомных админских ролей из .env
+        author_role_ids = [role.id for role in ctx.author.roles]
+        if any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS):
+            return True
+        
+        return False
+    return commands.check(predicate)
+
+def is_mod():
+    """Проверка, является ли пользователь модератором (из настроек сервера или .env)"""
+    async def predicate(ctx):
+        # Проверка прав администратора Discord
+        if ctx.author.guild_permissions.administrator:
+            return True
+        
+        # Проверка кастомных админских ролей из .env
+        author_role_ids = [role.id for role in ctx.author.roles]
+        if any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS):
+            return True
+        
+        # Проверка модераторских ролей из настроек сервера
+        mod_role_ids = await db.get_mod_role_ids(ctx.guild.id)
+        if any(mod_role_id in author_role_ids for mod_role_id in mod_role_ids):
+            return True
+        
+        return False
+    return commands.check(predicate)
+
+def command_enabled():
+    """Проверка, включена ли команда на сервере"""
+    async def predicate(ctx):
+        if ctx.command:
+            is_disabled = await db.is_command_disabled(ctx.guild.id, ctx.command.name)
+            if is_disabled:
+                embed = discord.Embed(
+                    title="❌ Команда отключена",
+                    description=f"Команда `{PREFIX}{ctx.command.name}` отключена на этом сервере.",
+                    color=COLORS['error']
+                )
+                await ctx.send(embed=embed)
+                return False
+        return True
+    return commands.check(predicate)
+
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+
+async def safe_send(ctx, content=None, embed=None, file=None, view=None):
+    try:
+        if file:
+            return await ctx.send(content=content, embed=embed, file=file, view=view)
+        else:
+            return await ctx.send(content=content, embed=embed, view=view)
+    except discord.Forbidden:
+        try:
+            await ctx.author.send("❌ У меня нет прав на отправку сообщений в том канале, где вы использовали команду!")
+        except:
+            logger.error(f"Не могу отправить сообщение пользователю {ctx.author}")
+        return None
+    except Exception as e:
+        logger.error(f"Ошибка при отправке сообщения: {e}")
+        return None
+
+async def safe_edit(message, content=None, embed=None, view=None):
+    try:
+        return await message.edit(content=content, embed=embed, view=view)
+    except Exception as e:
+        logger.error(f"Ошибка при редактировании сообщения: {e}")
+        return None
+
+async def check_and_assign_roles(member: discord.Member):
+    try:
+        guild_id = member.guild.id
+        
+        if guild_id not in GUILD_ROLE_SETTINGS:
+            loaded_settings, loaded_colors = await db.load_role_settings(guild_id)
+            if loaded_settings:
+                GUILD_ROLE_SETTINGS[guild_id] = loaded_settings
+                colors = {}
+                for role_name, color_str in loaded_colors.items():
+                    try:
+                        if color_str and color_str.startswith('#'):
+                            color_int = int(color_str[1:], 16)
+                            colors[role_name] = discord.Color(color_int)
+                        else:
+                            colors[role_name] = discord.Color.default()
+                    except:
+                        colors[role_name] = discord.Color.default()
+                GUILD_ROLE_COLORS[guild_id] = colors
+            else:
+                GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+                GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+        
+        role_settings = GUILD_ROLE_SETTINGS.get(guild_id, {})
+        role_colors = GUILD_ROLE_COLORS.get(guild_id, {})
+        
+        if not role_settings:
+            return
+        
+        points = await db.get_user_points(member.id, guild_id)
+        
+        target_role_name = None
+        for required_points, role_name in sorted(role_settings.items()):
+            if points >= required_points:
+                target_role_name = role_name
+        
+        if not target_role_name:
+            return
+        
+        discord_role = discord.utils.get(member.guild.roles, name=target_role_name)
+        if discord_role and discord_role in member.roles:
+            return
+        
+        for role_name in role_settings.values():
+            if role_name != target_role_name:
+                old_role = discord.utils.get(member.guild.roles, name=role_name)
+                if old_role and old_role in member.roles:
+                    try:
+                        await member.remove_roles(old_role)
+                    except:
+                        pass
+        
+        if not discord_role:
+            try:
+                color = role_colors.get(target_role_name, discord.Color.default())
+                if isinstance(color, str):
+                    try:
+                        if color.startswith('#'):
+                            color_int = int(color[1:], 16)
+                            color = discord.Color(color_int)
+                        else:
+                            color = discord.Color.default()
+                    except:
+                        color = discord.Color.default()
+                
+                discord_role = await member.guild.create_role(
+                    name=target_role_name,
+                    color=color,
+                    mentionable=True,
+                    reason="Автоматическое создание роли за поинты"
+                )
+                logger.info(f"Создана новая роль: {target_role_name} на сервере {member.guild.name}")
+            except discord.Forbidden:
+                logger.error(f'Недостаточно прав для создания роли {target_role_name}')
+                return
+            except Exception as e:
+                logger.error(f'Ошибка создания роли: {e}')
+                return
+        
+        try:
+            await member.add_roles(discord_role)
+            logger.info(f'Выдана роль {target_role_name} пользователю {member.display_name}')
+            
+            # Логируем действие
+            await db.add_action_log(
+                member.guild.id,
+                member.id,
+                "auto_role_assigned",
+                f"Получена роль {target_role_name} за {points} поинтов"
+            )
+        except discord.Forbidden:
+            logger.error(f'Недостаточно прав для выдачи роли {target_role_name}')
+        except Exception as e:
+            logger.error(f'Ошибка выдачи роли: {e}')
+            
+    except Exception as e:
+        logger.error(f'Ошибка в check_and_assign_roles: {e}')
+
+# ========== ФУНКЦИИ ДЛЯ БЛОКИРОВКИ КАНАЛОВ ==========
+
+async def apply_channel_lock(channel: discord.TextChannel, role: discord.Role, lock_type: str):
+    try:
+        overwrites = channel.overwrites_for(role)
+        
+        if lock_type == 'send':
+            overwrites.send_messages = False
+            overwrites.add_reactions = False
+            overwrites.attach_files = False
+        elif lock_type == 'view':
+            overwrites.read_messages = False
+            overwrites.send_messages = False
+        elif lock_type == 'both':
+            overwrites.read_messages = False
+            overwrites.send_messages = False
+            overwrites.add_reactions = False
+            overwrites.attach_files = False
+        
+        await channel.set_permissions(role, overwrite=overwrites)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка блокировки канала: {e}")
+        return False
+
+async def remove_channel_lock(channel: discord.TextChannel, role: discord.Role):
+    try:
+        await channel.set_permissions(role, overwrite=None)
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка разблокировки канала: {e}")
+        return False
+
+async def lock_all_channels_in_list(guild: discord.Guild, role: discord.Role, lock_type: str):
+    try:
+        results = []
+        channels_list = await db.get_channel_list(guild.id)
+        
+        if not channels_list:
+            return ["❌ Список каналов пуст. Добавьте каналы с помощью !addchannel"]
+        
+        for channel_data in channels_list:
+            try:
+                channel = guild.get_channel(channel_data['channel_id'])
+                if not channel:
+                    try:
+                        channel = await guild.fetch_channel(channel_data['channel_id'])
+                    except:
+                        channel = None
+                
+                if channel:
+                    await db.add_channel_lock(
+                        guild.id, channel.id, role.id, 
+                        lock_type, guild.me.id
+                    )
+                    
+                    success = await apply_channel_lock(channel, role, lock_type)
+                    
+                    if success:
+                        results.append(f"✅ {channel.mention}")
+                    else:
+                        results.append(f"⚠️ {channel.mention} - ошибка прав")
+                else:
+                    results.append(f"❌ Канал {channel_data['channel_name']} не найден")
+            except Exception as e:
+                results.append(f"❌ Ошибка: {str(e)[:50]}")
+        
+        return results
+    except Exception as e:
+        logger.error(f"Ошибка блокировки всех каналов: {e}")
+        return [f"❌ Ошибка: {str(e)[:100]}"]
+
+async def unlock_all_channels_in_list(guild: discord.Guild, role: discord.Role = None):
+    try:
+        results = []
+        channels_list = await db.get_channel_list(guild.id)
+        
+        if not channels_list:
+            return ["❌ Список каналов пуст"]
+        
+        for channel_data in channels_list:
+            try:
+                channel = guild.get_channel(channel_data['channel_id'])
+                if not channel:
+                    continue
+                
+                if role:
+                    await db.remove_channel_lock(guild.id, channel.id, role.id)
+                    success = await remove_channel_lock(channel, role)
+                    
+                    if success:
+                        results.append(f"✅ {channel.mention} - разблокирован для {role.mention}")
+                    else:
+                        results.append(f"⚠️ {channel.mention} - ошибка прав")
+                else:
+                    locks = await db.get_channel_locks(guild.id, channel.id)
+                    for lock in locks:
+                        role_obj = guild.get_role(lock['role_id'])
+                        if role_obj:
+                            await remove_channel_lock(channel, role_obj)
+                    
+                    await db.remove_channel_lock(guild.id, channel.id)
+                    results.append(f"✅ {channel.mention} - все блокировки сняты")
+            except Exception as e:
+                results.append(f"❌ {channel_data['channel_name']} - ошибка: {str(e)[:50]}")
+        
+        return results
+    except Exception as e:
+        logger.error(f"Ошибка разблокировки всех каналов: {e}")
+        return [f"❌ Ошибка: {str(e)[:100]}"]
 
 # ========== ВЕБ-СЕРВЕР ==========
 
@@ -926,329 +1200,644 @@ async def handle_oauth_callback(request):
             guilds_data
         )
     
-    return await create_results_page(user_data, guilds_data)
+    return web.Response(
+        text=f"✅ Авторизация успешна! Можете вернуться в Discord и использовать команду !checkoauth {user_data['username']}",
+        content_type='text/html'
+    )
 
-async def create_results_page(user_data, guilds_data):
-    """Создать страницу с результатами проверки"""
-    enemy_servers = []
-    ally_servers = []
-    neutral_servers = []
-    other_servers = []
+# ========== ВЕБ-ПАНЕЛЬ УПРАВЛЕНИЯ ==========
+
+async def handle_admin_panel(request):
+    """Главная страница панели управления"""
+    guild_id = request.match_info.get('guild_id')
     
-    # Сортируем серверы по названию
-    sorted_guilds = sorted(guilds_data, key=lambda x: x['name'].lower())
+    if not guild_id:
+        # Страница выбора сервера
+        html = await generate_guild_selection_page(request)
+    else:
+        # Страница настроек конкретного сервера
+        html = await generate_guild_settings_page(request, int(guild_id))
     
-    for guild in sorted_guilds:
-        guild_info = {
-            "id": guild['id'],
-            "name": guild['name'],
-            "icon": guild.get('icon'),
-            "owner": guild.get('owner', False),
-            "permissions": guild.get('permissions', '0'),
-            "approximate_member_count": guild.get('approximate_member_count', '?')
-        }
-        
-        guild_id = int(guild['id'])
-        
-        # Проверяем по ID сервера
-        if guild_id in ENEMY_SERVERS.values():
-            enemy_servers.append(guild_info)
-        elif guild_id in ALLY_SERVERS.values():
-            ally_servers.append(guild_info)
-        elif guild_id in NEUTRAL_SERVERS.values():
-            neutral_servers.append(guild_info)
-        else:
-            # Если не нашли по ID, проверяем по названию
-            name_lower = guild['name'].lower()
-            if 'enemy' in name_lower or 'враг' in name_lower or 'raid' in name_lower:
-                enemy_servers.append(guild_info)
-            elif 'ally' in name_lower or 'союз' in name_lower or 'friend' in name_lower:
-                ally_servers.append(guild_info)
-            elif 'peace' in name_lower or 'нейтр' in name_lower or 'neutral' in name_lower:
-                neutral_servers.append(guild_info)
-            else:
-                other_servers.append(guild_info)
+    return web.Response(text=html, content_type='text/html')
+
+async def generate_guild_selection_page(request):
+    """Генерация страницы выбора сервера"""
+    # Получаем токен из куки или параметра
+    token = request.cookies.get('access_token') or request.query.get('token')
     
-    # Сортируем каждую категорию
-    enemy_servers.sort(key=lambda x: x['name'])
-    ally_servers.sort(key=lambda x: x['name'])
-    neutral_servers.sort(key=lambda x: x['name'])
-    other_servers.sort(key=lambda x: x['name'])
+    guilds = []
+    user_info = None
     
-    # Создаем HTML
-    html = f"""
+    if token:
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": f"Bearer {token}"}
+            
+            # Получаем информацию о пользователе
+            async with session.get("https://discord.com/api/users/@me", headers=headers) as resp:
+                if resp.status == 200:
+                    user_info = await resp.json()
+            
+            # Получаем серверы пользователя
+            async with session.get("https://discord.com/api/users/@me/guilds", headers=headers) as resp:
+                if resp.status == 200:
+                    user_guilds = await resp.json()
+                    
+                    # Фильтруем серверы, где пользователь администратор
+                    for guild in user_guilds:
+                        perms = int(guild.get('permissions', 0))
+                        if perms & 0x8:  # ADMINISTRATOR permission
+                            guilds.append(guild)
+    
+    # Если нет токена, показываем кнопку входа
+    if not user_info:
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Панель управления ботом</title>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: Arial, sans-serif; background: #1a1a1a; color: #fff; margin: 0; padding: 20px; }}
+                .container {{ max-width: 800px; margin: 0 auto; text-align: center; }}
+                .login-btn {{
+                    background: #5865F2;
+                    color: white;
+                    border: none;
+                    padding: 15px 30px;
+                    font-size: 18px;
+                    border-radius: 5px;
+                    cursor: pointer;
+                    text-decoration: none;
+                    display: inline-block;
+                    margin-top: 20px;
+                }}
+                .login-btn:hover {{ background: #4752C4; }}
+                h1 {{ color: #5865F2; }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>🎮 Панель управления ботом</h1>
+                <p>Для доступа к панели управления необходимо авторизоваться через Discord</p>
+                <a href="/oauth2/start" class="login-btn">Войти через Discord</a>
+            </div>
+        </body>
+        </html>
+        """
+    
+    # Генерируем список серверов
+    guilds_html = ""
+    for guild in guilds:
+        guilds_html += f"""
+        <div class="guild-card">
+            <img src="https://cdn.discordapp.com/icons/{guild['id']}/{guild['icon']}.png" class="guild-icon" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+            <div class="guild-info">
+                <h3>{guild['name']}</h3>
+                <p>ID: {guild['id']}</p>
+                <a href="/admin/{guild['id']}" class="manage-btn">Управлять</a>
+            </div>
+        </div>
+        """
+    
+    return f"""
     <!DOCTYPE html>
     <html>
     <head>
-        <title>Результаты проверки</title>
+        <title>Панель управления - Выбор сервера</title>
         <meta charset="UTF-8">
         <style>
-            body {{ 
-                font-family: Arial, sans-serif; 
-                padding: 20px; 
-                background: #1a1a1a; 
-                color: #fff; 
-                margin: 0;
-            }}
-            .container {{ 
-                max-width: 1200px; 
-                margin: 0 auto; 
-            }}
-            .user-info {{ 
-                background: #2d2d2d; 
-                padding: 20px; 
-                border-radius: 10px; 
-                margin-bottom: 20px; 
-                position: sticky;
-                top: 0;
-                z-index: 100;
-            }}
-            .stats {{ 
-                display: flex; 
-                gap: 10px; 
-                margin: 20px 0; 
-                flex-wrap: wrap;
-            }}
-            .stat-box {{ 
-                flex: 1; 
-                min-width: 150px;
-                padding: 15px; 
-                text-align: center; 
-                border-radius: 5px; 
-                color: white; 
-                font-weight: bold;
-            }}
-            .stat-enemy {{ background: #f44336; }}
-            .stat-ally {{ background: #4CAF50; }}
-            .stat-neutral {{ background: #2196F3; }}
-            .stat-other {{ background: #9e9e9e; }}
-            
-            .server-section {{
-                margin-bottom: 30px;
+            body {{ font-family: Arial, sans-serif; background: #1a1a1a; color: #fff; margin: 0; padding: 20px; }}
+            .container {{ max-width: 1000px; margin: 0 auto; }}
+            .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }}
+            .user-info {{ display: flex; align-items: center; gap: 15px; }}
+            .user-avatar {{ width: 50px; height: 50px; border-radius: 50%; }}
+            h1 {{ color: #5865F2; margin: 0; }}
+            .guilds-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }}
+            .guild-card {{
                 background: #2d2d2d;
                 border-radius: 10px;
-                padding: 20px;
-            }}
-            
-            .server-grid {{
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-                gap: 10px;
-                margin-top: 15px;
-            }}
-            
-            .server-item {{ 
-                padding: 12px; 
-                border-radius: 5px; 
-                word-break: break-word;
-            }}
-            .enemy {{ background: #4a1e1e; border-left: 5px solid #f44336; }}
-            .ally {{ background: #1e4a1e; border-left: 5px solid #4CAF50; }}
-            .neutral {{ background: #1e3a4a; border-left: 5px solid #2196F3; }}
-            .other {{ background: #333; border-left: 5px solid #9e9e9e; }}
-            
-            .server-name {{
-                font-weight: bold;
-                font-size: 16px;
-                margin-bottom: 5px;
-            }}
-            
-            .server-details {{
-                font-size: 12px;
-                color: #aaa;
-            }}
-            
-            h2, h3 {{ 
-                color: #fff; 
-                margin-top: 0;
-            }}
-            
-            .section-title {{
+                padding: 15px;
                 display: flex;
-                justify-content: space-between;
                 align-items: center;
-                cursor: pointer;
-                padding: 10px;
-                background: #3d3d3d;
-                border-radius: 5px;
-                margin-bottom: 10px;
+                gap: 15px;
+                transition: transform 0.2s;
             }}
-            
-            .section-title:hover {{
-                background: #4d4d4d;
-            }}
-            
-            .toggle-icon {{
-                font-size: 20px;
-            }}
-            
-            .hidden {{
-                display: none;
-            }}
-            
-            .search-box {{
-                width: 100%;
-                padding: 10px;
-                margin-bottom: 20px;
-                border-radius: 5px;
-                border: none;
-                background: #3d3d3d;
+            .guild-card:hover {{ transform: translateY(-5px); background: #3d3d3d; }}
+            .guild-icon {{ width: 50px; height: 50px; border-radius: 50%; }}
+            .guild-info {{ flex: 1; }}
+            .guild-info h3 {{ margin: 0 0 5px 0; color: #fff; }}
+            .guild-info p {{ margin: 0; color: #888; font-size: 12px; }}
+            .manage-btn {{
+                background: #5865F2;
                 color: white;
-                font-size: 16px;
+                border: none;
+                padding: 5px 10px;
+                border-radius: 3px;
+                cursor: pointer;
+                text-decoration: none;
+                font-size: 12px;
+                display: inline-block;
+                margin-top: 5px;
             }}
-            
-            .search-box::placeholder {{
-                color: #888;
+            .manage-btn:hover {{ background: #4752C4; }}
+            .logout-btn {{
+                background: #f44336;
+                color: white;
+                border: none;
+                padding: 8px 15px;
+                border-radius: 5px;
+                cursor: pointer;
+                text-decoration: none;
             }}
-            
-            .count-badge {{
-                background: #4d4d4d;
-                padding: 3px 8px;
-                border-radius: 12px;
-                font-size: 14px;
-                margin-left: 10px;
-            }}
-            
-            a {{ color: #5865F2; text-decoration: none; }}
-            a:hover {{ text-decoration: underline; }}
+            .no-guilds {{ text-align: center; padding: 50px; color: #888; }}
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🔍 Результаты проверки</h1>
-            
-            <div class="user-info">
-                <h2>👤 Информация о пользователе</h2>
-                <p><strong>Имя:</strong> {user_data['username']}#{user_data.get('discriminator', '0')}</p>
-                <p><strong>ID:</strong> {user_data['id']}</p>
-                <p><strong>Всего серверов:</strong> {len(guilds_data)}</p>
+            <div class="header">
+                <h1>🎮 Панель управления ботом</h1>
+                <div class="user-info">
+                    <img src="https://cdn.discordapp.com/avatars/{user_info['id']}/{user_info['avatar']}.png" class="user-avatar" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                    <span>{user_info['username']}#{user_info.get('discriminator', '0')}</span>
+                    <a href="/logout" class="logout-btn">Выйти</a>
+                </div>
             </div>
             
-            <div class="stats">
-                <div class="stat-box stat-enemy">⚠️ ВРАГИ<br>{len(enemy_servers)}</div>
-                <div class="stat-box stat-ally">🤝 СОЮЗНИКИ<br>{len(ally_servers)}</div>
-                <div class="stat-box stat-neutral">🕊️ НЕЙТРАЛЬНЫЕ<br>{len(neutral_servers)}</div>
-                <div class="stat-box stat-other">📌 ДРУГИЕ<br>{len(other_servers)}</div>
+            <h2>Выберите сервер для управления</h2>
+            
+            <div class="guilds-grid">
+                {guilds_html if guilds_html else '<div class="no-guilds">У вас нет серверов с правами администратора, на которых есть бот</div>'}
             </div>
-            
-            <input type="text" class="search-box" id="searchInput" placeholder="🔍 Поиск серверов..." onkeyup="filterServers()">
-            
-            <div id="servers-container">
+        </div>
+    </body>
+    </html>
     """
+
+async def generate_guild_settings_page(request, guild_id: int):
+    """Генерация страницы настроек для конкретного сервера"""
+    # Получаем настройки сервера
+    settings = await db.get_guild_settings(guild_id)
     
-    # Функция для добавления секции серверов
-    def add_server_section(title, servers, color_class, emoji):
-        if not servers:
-            return ""
-        
-        section_html = f"""
-            <div class="server-section">
-                <div class="section-title" onclick="toggleSection('{color_class}')">
-                    <span><h3 style="margin:0;">{emoji} {title} <span class="count-badge">{len(servers)}</span></h3></span>
-                    <span class="toggle-icon" id="toggle-{color_class}">▼</span>
-                </div>
-                <div class="server-grid {color_class}-grid" id="section-{color_class}">
+    # Получаем информацию о сервере из Discord API
+    guild_info = None
+    for g in bot.guilds:
+        if g.id == guild_id:
+            guild_info = g
+            break
+    
+    if not guild_info:
+        return "<h1>Сервер не найден</h1><p>Бот не находится на этом сервере</p>"
+    
+    # Получаем все роли сервера
+    roles = sorted(guild_info.roles, key=lambda r: r.position, reverse=True)
+    
+    # Получаем список отключенных команд
+    disabled_commands = json.loads(settings.get('disabled_commands', '[]'))
+    
+    # Получаем список модераторских ролей
+    mod_role_ids = json.loads(settings.get('mod_role_ids', '[]'))
+    
+    # Получаем роли верификации
+    verify_role_id = settings.get('verify_role_id')
+    unverify_role_id = settings.get('unverify_role_id')
+    
+    # Получаем роль по умолчанию для блокировки
+    default_lock_role_id = settings.get('default_lock_role_id')
+    
+    # Получаем список всех команд
+    all_commands = [
+        'addpoints', 'removepoints', 'setpoints', 'resetpoints', 'points', 'leaderboard',
+        'addrole', 'removerole', 'editrole', 'setrolecolor', 'reorderroles', 'updateroles',
+        'addchannel', 'removechannel', 'listchannels', 'lock', 'unlock', 'lockrole', 'currentrole', 'resetrole', 'lockinfo', 'clearlocks',
+        'addclan', 'removeclan', 'allyclans', 'enemyclans', 'peaceclans', 'allclans', 'claninfo', 'editclan', 'searchclan', 'clearclans', 'setclangif',
+        'vouch', 'endvouch', 'vouchinfo',
+        'verify', 'verifyrole', 'clearverifyroles', 'verifyinfo',
+        'oauth', 'checkoauth',
+        'export', 'ping', 'help'
+    ]
+    
+    # Генерируем HTML для страницы
+    roles_options = ""
+    for role in roles:
+        if role.name != "@everyone":
+            selected = "selected" if role.id in mod_role_ids else ""
+            roles_options += f'<option value="{role.id}" {selected}>{role.name}</option>'
+    
+    verify_roles_options = '<option value="">Не выбрано</option>'
+    for role in roles:
+        if role.name != "@everyone":
+            selected_verify = "selected" if role.id == verify_role_id else ""
+            selected_unverify = "selected" if role.id == unverify_role_id else ""
+            verify_roles_options += f'<option value="{role.id}" data-verify="{selected_verify}" data-unverify="{selected_unverify}">{role.name}</option>'
+    
+    lock_roles_options = '<option value="">Не выбрано</option>'
+    for role in roles:
+        if role.name != "@everyone":
+            selected = "selected" if role.id == default_lock_role_id else ""
+            lock_roles_options += f'<option value="{role.id}" {selected}>{role.name}</option>'
+    
+    commands_checkboxes = ""
+    for cmd in all_commands:
+        checked = "checked" if cmd not in disabled_commands else ""
+        commands_checkboxes += f"""
+        <label class="command-item">
+            <input type="checkbox" name="command_{cmd}" {checked}> {PREFIX}{cmd}
+        </label>
         """
-        
-        for server in servers:
-            owner_tag = " 👑 Владелец" if server['owner'] else ""
-            members = f" 👥 {server['approximate_member_count']} уч." if server['approximate_member_count'] != '?' else ""
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Настройки сервера {guild_info.name}</title>
+        <meta charset="UTF-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; background: #1a1a1a; color: #fff; margin: 0; padding: 20px; }}
+            .container {{ max-width: 1200px; margin: 0 auto; }}
+            .header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }}
+            .back-btn {{
+                background: #4d4d4d;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                cursor: pointer;
+                text-decoration: none;
+            }}
+            h1 {{ color: #5865F2; margin: 0; }}
+            .guild-icon {{ width: 60px; height: 60px; border-radius: 50%; }}
             
-            section_html += f"""
-                    <div class="server-item {color_class}">
-                        <div class="server-name">{server['name']}{owner_tag}</div>
-                        <div class="server-details">
-                            ID: {server['id']}{members}
+            .tabs {{ display: flex; gap: 10px; margin-bottom: 20px; }}
+            .tab {{
+                padding: 10px 20px;
+                background: #2d2d2d;
+                border: none;
+                color: #fff;
+                cursor: pointer;
+                border-radius: 5px 5px 0 0;
+            }}
+            .tab.active {{ background: #5865F2; }}
+            .tab-content {{ display: none; background: #2d2d2d; padding: 20px; border-radius: 0 5px 5px 5px; }}
+            .tab-content.active {{ display: block; }}
+            
+            .settings-section {{
+                background: #3d3d3d;
+                border-radius: 5px;
+                padding: 20px;
+                margin-bottom: 20px;
+            }}
+            .settings-section h3 {{ margin-top: 0; color: #5865F2; }}
+            
+            .commands-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+                gap: 10px;
+                margin-top: 15px;
+            }}
+            .command-item {{
+                background: #4d4d4d;
+                padding: 8px;
+                border-radius: 3px;
+                cursor: pointer;
+            }}
+            .command-item:hover {{ background: #5d5d5d; }}
+            
+            select, input[type="text"] {{
+                width: 100%;
+                padding: 8px;
+                margin: 5px 0 15px;
+                border: 1px solid #4d4d4d;
+                background: #3d3d3d;
+                color: #fff;
+                border-radius: 3px;
+            }}
+            
+            .role-select {{
+                height: 200px;
+            }}
+            
+            button {{
+                background: #5865F2;
+                color: white;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+            }}
+            button:hover {{ background: #4752C4; }}
+            button.danger {{ background: #f44336; }}
+            button.danger:hover {{ background: #d32f2f; }}
+            
+            .success-message {{
+                background: #4CAF50;
+                color: white;
+                padding: 10px;
+                border-radius: 5px;
+                margin-bottom: 20px;
+                display: none;
+            }}
+            
+            .logs-table {{
+                width: 100%;
+                border-collapse: collapse;
+            }}
+            .logs-table th, .logs-table td {{
+                padding: 10px;
+                text-align: left;
+                border-bottom: 1px solid #4d4d4d;
+            }}
+            .logs-table th {{ background: #3d3d3d; }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <div style="display: flex; align-items: center; gap: 15px;">
+                    <img src="https://cdn.discordapp.com/icons/{guild_id}/{guild_info.icon}.png" class="guild-icon" onerror="this.src='https://cdn.discordapp.com/embed/avatars/0.png'">
+                    <h1>Настройки сервера {guild_info.name}</h1>
+                </div>
+                <a href="/admin" class="back-btn">← Назад к серверам</a>
+            </div>
+            
+            <div id="successMessage" class="success-message">✅ Настройки успешно сохранены!</div>
+            
+            <div class="tabs">
+                <button class="tab active" onclick="showTab('commands')">⚙️ Команды</button>
+                <button class="tab" onclick="showTab('roles')">👥 Роли</button>
+                <button class="tab" onclick="showTab('verify')">🔐 Верификация</button>
+                <button class="tab" onclick="showTab('lock')">🔒 Блокировка</button>
+                <button class="tab" onclick="showTab('logs')">📋 Логи</button>
+            </div>
+            
+            <div id="commandsTab" class="tab-content active">
+                <div class="settings-section">
+                    <h3>Отключенные команды</h3>
+                    <p>Снимите галочки с команд, которые должны быть доступны на сервере</p>
+                    <form onsubmit="saveSettings(event, 'commands')">
+                        <div class="commands-grid">
+                            {commands_checkboxes}
                         </div>
-                    </div>
-            """
-        
-        section_html += """
+                        <button type="submit">Сохранить настройки команд</button>
+                    </form>
                 </div>
             </div>
-        """
-        return section_html
-    
-    # Добавляем все секции
-    html += add_server_section("ВРАЖЕСКИЕ СЕРВЕРЫ", enemy_servers, "enemy", "⚠️")
-    html += add_server_section("СОЮЗНЫЕ СЕРВЕРЫ", ally_servers, "ally", "🤝")
-    html += add_server_section("НЕЙТРАЛЬНЫЕ СЕРВЕРЫ", neutral_servers, "neutral", "🕊️")
-    html += add_server_section("ДРУГИЕ СЕРВЕРЫ", other_servers, "other", "📌")
-    
-    html += """
+            
+            <div id="rolesTab" class="tab-content">
+                <div class="settings-section">
+                    <h3>Модераторские роли</h3>
+                    <p>Выберите роли, которые будут иметь доступ к модераторским командам</p>
+                    <form onsubmit="saveSettings(event, 'mod_roles')">
+                        <select name="mod_roles" class="role-select" multiple>
+                            {roles_options}
+                        </select>
+                        <button type="submit">Сохранить модераторские роли</button>
+                    </form>
+                </div>
             </div>
             
-            <p style="margin-top: 20px; text-align: center;">
-                <a href="/oauth2/login">🔄 Проверить другого пользователя</a>
-            </p>
+            <div id="verifyTab" class="tab-content">
+                <div class="settings-section">
+                    <h3>Роли верификации</h3>
+                    <p>Настройте роли для команды !verify</p>
+                    <form onsubmit="saveSettings(event, 'verify')">
+                        <label>Роль для выдачи (verify):</label>
+                        <select name="verify_role">
+                            {verify_roles_options}
+                        </select>
+                        
+                        <label>Роль для снятия (unverify):</label>
+                        <select name="unverify_role">
+                            {verify_roles_options}
+                        </select>
+                        
+                        <button type="submit">Сохранить роли верификации</button>
+                    </form>
+                </div>
+            </div>
+            
+            <div id="lockTab" class="tab-content">
+                <div class="settings-section">
+                    <h3>Роль по умолчанию для блокировки</h3>
+                    <p>Роль, которая будет использоваться в командах !lock и !unlock</p>
+                    <form onsubmit="saveSettings(event, 'lock_role')">
+                        <select name="default_lock_role">
+                            {lock_roles_options}
+                        </select>
+                        <button type="submit">Сохранить роль для блокировки</button>
+                    </form>
+                </div>
+            </div>
+            
+            <div id="logsTab" class="tab-content">
+                <div class="settings-section">
+                    <h3>Последние действия</h3>
+                    <table class="logs-table" id="logsTable">
+                        <thead>
+                            <tr>
+                                <th>Время</th>
+                                <th>Пользователь</th>
+                                <th>Действие</th>
+                                <th>Детали</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr><td colspan="4">Загрузка логов...</td></tr>
+                        </tbody>
+                    </table>
+                    <button onclick="loadLogs()" style="margin-top: 10px;">Обновить логи</button>
+                </div>
+            </div>
         </div>
         
         <script>
-            function filterServers() {
-                const input = document.getElementById('searchInput');
-                const filter = input.value.toLowerCase();
-                const containers = document.querySelectorAll('.server-grid');
+            function showTab(tabName) {{
+                const tabs = document.querySelectorAll('.tab');
+                const contents = document.querySelectorAll('.tab-content');
                 
-                containers.forEach(container => {
-                    const items = container.getElementsByClassName('server-item');
-                    let visibleCount = 0;
-                    
-                    Array.from(items).forEach(item => {
-                        const text = item.textContent.toLowerCase();
-                        if (text.includes(filter)) {
-                            item.style.display = 'block';
-                            visibleCount++;
-                        } else {
-                            item.style.display = 'none';
-                        }
-                    });
-                    
-                    const section = container.closest('.server-section');
-                    if (section) {
-                        const title = section.querySelector('.section-title h3');
-                        if (title) {
-                            const match = title.innerHTML.match(/\\d+/);
-                            if (match) {
-                                title.innerHTML = title.innerHTML.replace(match[0], visibleCount);
-                            }
-                        }
-                    }
-                });
-            }
-            
-            function toggleSection(sectionClass) {
-                const grid = document.getElementById('section-' + sectionClass);
-                const toggle = document.getElementById('toggle-' + sectionClass);
+                tabs.forEach(t => t.classList.remove('active'));
+                contents.forEach(c => c.classList.remove('active'));
                 
-                if (grid.classList.contains('hidden')) {
-                    grid.classList.remove('hidden');
-                    toggle.innerHTML = '▼';
-                } else {
-                    grid.classList.add('hidden');
-                    toggle.innerHTML = '▶';
-                }
-            }
+                document.querySelector(`.tab[onclick="showTab('${{tabName}}')"]`).classList.add('active');
+                document.getElementById(tabName + 'Tab').classList.add('active');
+            }}
             
-            const style = document.createElement('style');
-            style.innerHTML = '.hidden { display: none !important; }';
-            document.head.appendChild(style);
+            async function saveSettings(event, type) {{
+                event.preventDefault();
+                
+                let data = {{}};
+                
+                if (type === 'commands') {{
+                    const commands = [];
+                    document.querySelectorAll('input[type="checkbox"]').forEach(cb => {{
+                        if (!cb.checked) {{
+                            commands.push(cb.name.replace('command_', ''));
+                        }}
+                    }});
+                    data.disabled_commands = commands;
+                }}
+                else if (type === 'mod_roles') {{
+                    const select = document.querySelector('select[name="mod_roles"]');
+                    const selected = Array.from(select.selectedOptions).map(opt => opt.value);
+                    data.mod_role_ids = selected;
+                }}
+                else if (type === 'verify') {{
+                    data.verify_role_id = document.querySelector('select[name="verify_role"]').value;
+                    data.unverify_role_id = document.querySelector('select[name="unverify_role"]').value;
+                }}
+                else if (type === 'lock_role') {{
+                    data.default_lock_role_id = document.querySelector('select[name="default_lock_role"]').value;
+                }}
+                
+                try {{
+                    const response = await fetch('/api/save_settings/{guild_id}', {{
+                        method: 'POST',
+                        headers: {{ 'Content-Type': 'application/json' }},
+                        body: JSON.stringify(data)
+                    }});
+                    
+                    if (response.ok) {{
+                        const message = document.getElementById('successMessage');
+                        message.style.display = 'block';
+                        setTimeout(() => message.style.display = 'none', 3000);
+                    }}
+                }} catch (e) {{
+                    alert('Ошибка при сохранении: ' + e);
+                }}
+            }}
+            
+            async function loadLogs() {{
+                try {{
+                    const response = await fetch('/api/logs/{guild_id}');
+                    const logs = await response.json();
+                    
+                    let html = '';
+                    logs.forEach(log => {{
+                        html += `<tr>
+                            <td>${{new Date(log.timestamp).toLocaleString()}}</td>
+                            <td><code>${{log.user_id}}</code></td>
+                            <td>${{log.action}}</td>
+                            <td>${{log.details || ''}}</td>
+                        </tr>`;
+                    }});
+                    
+                    document.querySelector('#logsTable tbody').innerHTML = html;
+                }} catch (e) {{
+                    console.error('Ошибка загрузки логов:', e);
+                }}
+            }}
+            
+            // Загружаем логи при открытии вкладки
+            document.querySelector('.tab[onclick="showTab(\'logs\')"]').addEventListener('click', loadLogs);
+            
+            // Предзаполняем select для верификации
+            document.addEventListener('DOMContentLoaded', function() {{
+                const verifySelect = document.querySelector('select[name="verify_role"]');
+                const unverifySelect = document.querySelector('select[name="unverify_role"]');
+                
+                if (verifySelect) {{
+                    Array.from(verifySelect.options).forEach(opt => {{
+                        if (opt.getAttribute('data-verify') === 'selected') {{
+                            opt.selected = true;
+                        }}
+                    }});
+                }}
+                
+                if (unverifySelect) {{
+                    Array.from(unverifySelect.options).forEach(opt => {{
+                        if (opt.getAttribute('data-unverify') === 'selected') {{
+                            opt.selected = true;
+                        }}
+                    }});
+                }}
+            }});
         </script>
     </body>
     </html>
     """
+
+async def handle_save_settings(request):
+    """Сохранение настроек сервера"""
+    guild_id = int(request.match_info['guild_id'])
     
-    return web.Response(text=html, content_type='text/html')
+    try:
+        data = await request.json()
+        
+        # Получаем текущие настройки
+        settings = await db.get_guild_settings(guild_id)
+        
+        # Обновляем настройки
+        if 'disabled_commands' in data:
+            settings['disabled_commands'] = json.dumps(data['disabled_commands'])
+        
+        if 'mod_role_ids' in data:
+            settings['mod_role_ids'] = json.dumps([int(id) for id in data['mod_role_ids'] if id])
+        
+        if 'verify_role_id' in data:
+            settings['verify_role_id'] = int(data['verify_role_id']) if data['verify_role_id'] else None
+        
+        if 'unverify_role_id' in data:
+            settings['unverify_role_id'] = int(data['unverify_role_id']) if data['unverify_role_id'] else None
+        
+        if 'default_lock_role_id' in data:
+            settings['default_lock_role_id'] = int(data['default_lock_role_id']) if data['default_lock_role_id'] else None
+        
+        # Сохраняем в БД
+        await db.update_guild_settings(guild_id, settings, 0)  # user_id 0 означает веб-панель
+        
+        return web.json_response({'status': 'success'})
+    except Exception as e:
+        logger.error(f"Ошибка сохранения настроек: {e}")
+        return web.json_response({'status': 'error', 'message': str(e)}, status=500)
+
+async def handle_get_logs(request):
+    """Получение логов для сервера"""
+    guild_id = int(request.match_info['guild_id'])
+    
+    try:
+        logs = await db.get_action_logs(guild_id, 50)
+        
+        result = []
+        for log in logs:
+            result.append({
+                'id': log['id'],
+                'user_id': log['user_id'],
+                'action': log['action'],
+                'details': log['details'],
+                'timestamp': log['timestamp'].isoformat() if log['timestamp'] else None
+            })
+        
+        return web.json_response(result)
+    except Exception as e:
+        logger.error(f"Ошибка получения логов: {e}")
+        return web.json_response([], status=500)
+
+async def handle_logout(request):
+    """Выход из системы"""
+    response = web.HTTPFound('/admin')
+    response.del_cookie('access_token')
+    return response
 
 async def start_web_server():
     try:
         app = web.Application()
         
+        # Основные маршруты
         app.router.add_get('/', handle_root)
         app.router.add_get('/ping', handle_ping)
         app.router.add_get('/health', handle_health)
+        
+        # OAuth2 маршруты
         app.router.add_get('/oauth2/login', handle_oauth_login)
         app.router.add_get('/oauth2/start', handle_oauth_start)
         app.router.add_get('/oauth2/callback', handle_oauth_callback)
+        
+        # Панель управления
+        app.router.add_get('/admin', handle_admin_panel)
+        app.router.add_get('/admin/{guild_id}', handle_admin_panel)
+        app.router.add_post('/api/save_settings/{guild_id}', handle_save_settings)
+        app.router.add_get('/api/logs/{guild_id}', handle_get_logs)
+        app.router.add_get('/logout', handle_logout)
         
         runner = web.AppRunner(app)
         await runner.setup()
@@ -1256,275 +1845,13 @@ async def start_web_server():
         await site.start()
         
         logger.info(f"🌐 Веб-сервер запущен на порту {PORT}")
+        logger.info(f"🔗 Панель управления: http://0.0.0.0:{PORT}/admin")
         logger.info(f"🔗 OAuth2 URL: http://0.0.0.0:{PORT}/oauth2/login")
         
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка запуска веб-сервера: {e}")
         return False
-
-# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С РОЛЯМИ ==========
-
-def is_admin():
-    async def predicate(ctx):
-        if ctx.author.guild_permissions.administrator:
-            return True
-        author_role_ids = [role.id for role in ctx.author.roles]
-        return any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS)
-    return commands.check(predicate)
-
-def is_mod():
-    """Проверка, является ли пользователь модератором"""
-    async def predicate(ctx):
-        # Проверка прав администратора Discord
-        if ctx.author.guild_permissions.administrator:
-            return True
-        
-        # Проверка кастомных админских ролей
-        author_role_ids = [role.id for role in ctx.author.roles]
-        if any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS):
-            return True
-        
-        # Проверка модераторских ролей
-        if any(mod_role_id in author_role_ids for mod_role_id in MOD_ROLE_IDS):
-            return True
-        
-        return False
-    return commands.check(predicate)
-
-def is_admin_or_mod():
-    """Проверка, является ли пользователь администратором или модератором"""
-    async def predicate(ctx):
-        # Проверка прав администратора Discord
-        if ctx.author.guild_permissions.administrator:
-            return True
-        
-        # Проверка кастомных админских ролей
-        author_role_ids = [role.id for role in ctx.author.roles]
-        if any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS):
-            return True
-        
-        # Проверка модераторских ролей
-        if any(mod_role_id in author_role_ids for mod_role_id in MOD_ROLE_IDS):
-            return True
-        
-        return False
-    return commands.check(predicate)
-
-async def check_and_assign_roles(member: discord.Member):
-    try:
-        guild_id = member.guild.id
-        user_id = member.id
-        
-        role_settings, role_colors = get_guild_settings(guild_id)
-        
-        if not role_settings:
-            return
-        
-        points = await db.get_user_points(user_id, guild_id)
-        
-        target_role_name = None
-        for required_points, role_name in sorted(role_settings.items()):
-            if points >= required_points:
-                target_role_name = role_name
-        
-        if not target_role_name:
-            return
-        
-        discord_role = discord.utils.get(member.guild.roles, name=target_role_name)
-        if discord_role and discord_role in member.roles:
-            return
-        
-        for role_name in role_settings.values():
-            if role_name != target_role_name:
-                old_role = discord.utils.get(member.guild.roles, name=role_name)
-                if old_role and old_role in member.roles:
-                    try:
-                        await member.remove_roles(old_role)
-                    except:
-                        pass
-        
-        if not discord_role:
-            try:
-                color = role_colors.get(target_role_name, discord.Color.default())
-                if isinstance(color, str):
-                    try:
-                        if color.startswith('#'):
-                            color_int = int(color[1:], 16)
-                            color = discord.Color(color_int)
-                        else:
-                            color = discord.Color.default()
-                    except:
-                        color = discord.Color.default()
-                
-                discord_role = await member.guild.create_role(
-                    name=target_role_name,
-                    color=color,
-                    mentionable=True,
-                    reason="Автоматическое создание роли за поинты"
-                )
-                logger.info(f"Создана новая роль: {target_role_name} на сервере {member.guild.name}")
-            except discord.Forbidden:
-                logger.error(f'Недостаточно прав для создания роли {target_role_name}')
-                return
-            except Exception as e:
-                logger.error(f'Ошибка создания роли: {e}')
-                return
-        
-        try:
-            await member.add_roles(discord_role)
-            await send_role_notification(member, target_role_name, points)
-            logger.info(f'Выдана роль {target_role_name} пользователю {member.display_name}')
-        except discord.Forbidden:
-            logger.error(f'Недостаточно прав для выдачи роли {target_role_name}')
-        except Exception as e:
-            logger.error(f'Ошибка выдачи роли: {e}')
-            
-    except Exception as e:
-        logger.error(f'Ошибка в check_and_assign_roles: {e}')
-
-async def send_role_notification(member: discord.Member, role_name: str, points: int):
-    try:
-        embed = discord.Embed(
-            title="🎉 Новая роль получена!",
-            description=f"**{member.display_name}** получил(а) новую роль!",
-            color=discord.Color.green()
-        )
-        
-        embed.add_field(name="Роль", value=f"`{role_name}`", inline=True)
-        embed.add_field(name="Поинты", value=f"`{points}`", inline=True)
-        
-        congratulations = {
-            'raider newgen': "Добро пожаловать в ряды рейдеров! 🚀",
-            'raider scout': "Отличная работа! Ты становишься опытным скаутом! 🔍",
-            'raider striker': "Впечатляюще! Ты теперь ударная сила нашего отряда! 💥",
-            'raider legend': "Легендарно! Твои достижения войдут в историю! 📜",
-            'raider commander': "Величайший из великих! Ты ведешь за собой весь отряд! 👑"
-        }
-        
-        congrats = congratulations.get(role_name, "Поздравляем с получением новой роли! ✨")
-        embed.add_field(name="Поздравления!", value=congrats, inline=False)
-        
-        if member.guild.system_channel:
-            await member.guild.system_channel.send(member.mention, embed=embed)
-        else:
-            try:
-                await member.send(embed=embed)
-            except:
-                pass
-    except Exception as e:
-        logger.error(f"Ошибка отправки уведомления: {e}")
-
-# ========== ФУНКЦИИ ДЛЯ БЛОКИРОВКИ КАНАЛОВ ==========
-
-async def apply_channel_lock(channel: discord.TextChannel, role: discord.Role, lock_type: str):
-    try:
-        overwrites = channel.overwrites_for(role)
-        
-        if lock_type == 'send':
-            overwrites.send_messages = False
-            overwrites.add_reactions = False
-            overwrites.attach_files = False
-        elif lock_type == 'view':
-            overwrites.read_messages = False
-            overwrites.send_messages = False
-        elif lock_type == 'both':
-            overwrites.read_messages = False
-            overwrites.send_messages = False
-            overwrites.add_reactions = False
-            overwrites.attach_files = False
-        
-        await channel.set_permissions(role, overwrite=overwrites)
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка блокировки канала: {e}")
-        return False
-
-async def remove_channel_lock(channel: discord.TextChannel, role: discord.Role):
-    try:
-        await channel.set_permissions(role, overwrite=None)
-        return True
-    except Exception as e:
-        logger.error(f"Ошибка разблокировки канала: {e}")
-        return False
-
-async def lock_all_channels_in_list(guild: discord.Guild, role: discord.Role, lock_type: str):
-    try:
-        results = []
-        channels_list = await db.get_channel_list(guild.id)
-        
-        if not channels_list:
-            return ["❌ Список каналов пуст. Добавьте каналы с помощью !addchannel"]
-        
-        for channel_data in channels_list:
-            try:
-                channel = guild.get_channel(channel_data['channel_id'])
-                if not channel:
-                    try:
-                        channel = await guild.fetch_channel(channel_data['channel_id'])
-                    except:
-                        channel = None
-                
-                if channel:
-                    await db.add_channel_lock(
-                        guild.id, channel.id, role.id, 
-                        lock_type, guild.me.id
-                    )
-                    
-                    success = await apply_channel_lock(channel, role, lock_type)
-                    
-                    if success:
-                        results.append(f"✅ {channel.mention}")
-                    else:
-                        results.append(f"⚠️ {channel.mention} - ошибка прав")
-                else:
-                    results.append(f"❌ Канал {channel_data['channel_name']} не найден")
-            except Exception as e:
-                results.append(f"❌ Ошибка: {str(e)[:50]}")
-        
-        return results
-    except Exception as e:
-        logger.error(f"Ошибка блокировки всех каналов: {e}")
-        return [f"❌ Ошибка: {str(e)[:100]}"]
-
-async def unlock_all_channels_in_list(guild: discord.Guild, role: discord.Role = None):
-    try:
-        results = []
-        channels_list = await db.get_channel_list(guild.id)
-        
-        if not channels_list:
-            return ["❌ Список каналов пуст"]
-        
-        for channel_data in channels_list:
-            try:
-                channel = guild.get_channel(channel_data['channel_id'])
-                if not channel:
-                    continue
-                
-                if role:
-                    await db.remove_channel_lock(guild.id, channel.id, role.id)
-                    success = await remove_channel_lock(channel, role)
-                    
-                    if success:
-                        results.append(f"✅ {channel.mention} - разблокирован для {role.mention}")
-                    else:
-                        results.append(f"⚠️ {channel.mention} - ошибка прав")
-                else:
-                    locks = await db.get_channel_locks(guild.id, channel.id)
-                    for lock in locks:
-                        role_obj = guild.get_role(lock['role_id'])
-                        if role_obj:
-                            await remove_channel_lock(channel, role_obj)
-                    
-                    await db.remove_channel_lock(guild.id, channel.id)
-                    results.append(f"✅ {channel.mention} - все блокировки сняты")
-            except Exception as e:
-                results.append(f"❌ {channel_data['channel_name']} - ошибка: {str(e)[:50]}")
-        
-        return results
-    except Exception as e:
-        logger.error(f"Ошибка разблокировки всех каналов: {e}")
-        return [f"❌ Ошибка: {str(e)[:100]}"]
 
 # ========== СОБЫТИЯ БОТА ==========
 
@@ -1537,11 +1864,7 @@ async def on_ready():
     if await db.connect():
         logger.info("✅ База данных подключена")
         
-        global clan_manager
-        clan_manager = ClanManager(db.pool)
-        await clan_manager.init_tables()
-        logger.info("✅ Менеджер кланов инициализирован")
-        
+        # Загружаем настройки ролей для всех серверов
         global GUILD_ROLE_SETTINGS, GUILD_ROLE_COLORS
         for guild in bot.guilds:
             try:
@@ -1603,1830 +1926,81 @@ async def on_guild_join(guild):
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения настроек для нового сервера {guild.name}: {e}")
 
-# ========== ROBLOX КОМАНДЫ ==========
-
-@bot.command(name='checkroblox')
-@is_admin_or_mod()
-async def check_roblox_user(ctx, roblox_username: str):
-    """
-    Проверить Roblox-пользователя на вражеские приписки
-    
-    Пример: !checkroblox [ENEMY]Player123
-    """
-    
-    status_msg = await ctx.send(f"🔍 Проверяю пользователя **{roblox_username}**...")
-    
-    # 1. Проверяем ник на наличие приписок
-    is_enemy, found_tag = await check_roblox_username(roblox_username)
-    
-    if is_enemy:
-        embed = discord.Embed(
-            title="⚠️ ВРАЖЕСКИЙ ПОЛЬЗОВАТЕЛЬ!",
-            description=f"**{roblox_username}** обнаружен в списке врагов",
-            color=COLORS['error']
-        )
-        embed.add_field(
-            name="📌 Найдена приписка",
-            value=f"`{found_tag}`",
-            inline=True
-        )
-        embed.set_footer(text="Будьте осторожны!")
-        
-        await status_msg.edit(content=None, embed=embed)
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
         return
     
-    # 2. Если в нике нет приписок, получаем информацию через API
+    if not ctx.channel.permissions_for(ctx.guild.me).send_messages:
+        logger.error(f"Ошибка команды в канале без прав на отправку: {error}")
+        return
+    
     try:
-        user_id = await get_roblox_user_id(roblox_username)
-        
-        if not user_id:
+        if isinstance(error, commands.CheckFailure):
+            # Проверяем, отключена ли команда
+            if ctx.command and await db.is_command_disabled(ctx.guild.id, ctx.command.name):
+                return  # Сообщение уже отправлено в проверке
+            
             embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"Пользователь **{roblox_username}** не найден в Roblox",
+                title="❌ Недостаточно прав",
+                description=f"У вас нет прав для использования этой команды!",
                 color=COLORS['error']
             )
-            await status_msg.edit(content=None, embed=embed)
-            return
-        
-        # Получаем информацию о пользователе
-        async with aiohttp.ClientSession() as session:
-            async with session.get(f"https://users.roblox.com/v1/users/{user_id}") as resp:
-                if resp.status == 200:
-                    user_info = await resp.json()
-                    description = user_info.get('description', '')
-                    display_name = user_info.get('displayName', '')
-                    
-                    # Проверяем описание и display name
-                    is_enemy_desc, found_desc_tag = await check_roblox_username(description)
-                    is_enemy_display, found_display_tag = await check_roblox_username(display_name)
-                    
-                    if is_enemy_desc or is_enemy_display:
-                        embed = discord.Embed(
-                            title="⚠️ ВРАГ В ПРОФИЛЕ!",
-                            description=f"**{roblox_username}** имеет вражеские теги в профиле",
-                            color=COLORS['orange']
-                        )
-                        
-                        if is_enemy_desc:
-                            embed.add_field(
-                                name="📝 В описании",
-                                value=f"`{found_desc_tag}`\n{description[:100]}",
-                                inline=False
-                            )
-                        
-                        if is_enemy_display:
-                            embed.add_field(
-                                name="👤 В отображаемом имени",
-                                value=f"`{found_display_tag}`",
-                                inline=False
-                            )
-                        
-                        await status_msg.edit(content=None, embed=embed)
-                        return
-        
-        # Если ничего не найдено
-        embed = discord.Embed(
-            title="✅ ПОЛЬЗОВАТЕЛЬ ЧИСТ",
-            description=f"**{roblox_username}** не имеет вражеских приписок",
-            color=COLORS['success']
-        )
-        embed.add_field(
-            name="🆔 Roblox ID",
-            value=f"`{user_id}`",
-            inline=True
-        )
-        await status_msg.edit(content=None, embed=embed)
-        
-    except Exception as e:
-        logger.error(f"Ошибка проверки Roblox: {e}")
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Не удалось проверить пользователя: {str(e)[:100]}",
-            color=COLORS['error']
-        )
-        await status_msg.edit(content=None, embed=embed)
-
-@bot.command(name='checkfriends')
-@is_admin_or_mod()
-async def check_roblox_friends(ctx, roblox_username: str):
-    """
-    Проверить ВСЕХ друзей Roblox-пользователя на вражеские приписки
-    
-    Пример: !checkfriends Player123
-    """
-    
-    status_msg = await ctx.send(f"🔍 Получаю список друзей **{roblox_username}**... Это может занять время")
-    
-    try:
-        # Получаем ID пользователя
-        user_id = await get_roblox_user_id(roblox_username)
-        
-        if not user_id:
+            await safe_send(ctx, embed=embed)
+            
+        elif isinstance(error, commands.MissingRequiredArgument):
             embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"Пользователь **{roblox_username}** не найден в Roblox",
+                title="❌ Не хватает аргументов",
+                description=f"Используйте `{PREFIX}help` для справки по командам",
                 color=COLORS['error']
             )
-            await status_msg.edit(content=None, embed=embed)
-            return
-        
-        # Получаем список друзей (теперь без ограничения)
-        await status_msg.edit(content=f"🔍 Получаю список друзей **{roblox_username}**... (это может занять 10-30 секунд)")
-        
-        # Функция для получения всех друзей через курсор (пагинация)
-        all_friends = []
-        cursor = ""
-        
-        async with aiohttp.ClientSession() as session:
-            while True:
-                url = f"https://friends.roblox.com/v1/users/{user_id}/friends"
-                if cursor:
-                    url += f"?cursor={cursor}"
-                
-                async with session.get(url) as resp:
-                    if resp.status != 200:
-                        break
-                    
-                    data = await resp.json()
-                    friends_batch = data.get('data', [])
-                    all_friends.extend(friends_batch)
-                    
-                    # Проверяем, есть ли следующая страница
-                    cursor = data.get('nextPageCursor')
-                    if not cursor:
-                        break
-                    
-                    # Небольшая задержка чтобы не забанили за спам
-                    await asyncio.sleep(0.5)
-        
-        total_friends = len(all_friends)
-        
-        if total_friends == 0:
-            embed = discord.Embed(
-                title="👥 Нет друзей",
-                description=f"У **{roblox_username}** нет друзей или они скрыты",
-                color=COLORS['info']
-            )
-            await status_msg.edit(content=None, embed=embed)
-            return
-        
-        # Обновляем статус
-        await status_msg.edit(content=f"🔍 Анализирую {total_friends} друзей **{roblox_username}**...")
-        
-        # Проверяем каждого друга
-        enemies_found = []
-        
-        for friend in all_friends:
-            friend_name = friend.get('name', '')
-            friend_display = friend.get('displayName', '')
+            await safe_send(ctx, embed=embed)
             
-            # Проверяем имя и display name
-            is_enemy_name, tag_name = await check_roblox_username(friend_name)
-            is_enemy_display, tag_display = await check_roblox_username(friend_display)
-            
-            if is_enemy_name or is_enemy_display:
-                enemies_found.append({
-                    'name': friend_name,
-                    'display': friend_display,
-                    'id': friend.get('id', '?'),
-                    'tag': tag_name or tag_display
-                })
-        
-        # Формируем результат
-        if enemies_found:
+        elif isinstance(error, commands.BadArgument):
             embed = discord.Embed(
-                title=f"⚠️ Найдено {len(enemies_found)} врагов в друзьях!",
-                description=f"У пользователя **{roblox_username}** есть подозрительные друзья",
+                title="❌ Неправильные аргументы",
+                description="Проверьте правильность введенных данных",
                 color=COLORS['error']
             )
+            await safe_send(ctx, embed=embed)
             
-            # Показываем первых 15 врагов
-            for enemy in enemies_found[:15]:
-                name = enemy['display'] if enemy['display'] and enemy['display'] != enemy['name'] else enemy['name']
-                embed.add_field(
-                    name=name,
-                    value=f"ID: {enemy['id']} | Тег: {enemy['tag']}",
-                    inline=False
-                )
-            
-            if len(enemies_found) > 15:
-                embed.set_footer(text=f"и ещё {len(enemies_found) - 15} врагов...")
-            
-        else:
+        elif isinstance(error, commands.TooManyArguments):
             embed = discord.Embed(
-                title="✅ Друзья чисты",
-                description=f"У **{roblox_username}** нет друзей с вражескими приписками",
-                color=COLORS['success']
-            )
-        
-        embed.add_field(
-            name="📊 Статистика",
-            value=f"Всего друзей: **{total_friends}**\nПроверено: **{total_friends}**",
-            inline=False
-        )
-        
-        await status_msg.edit(content=None, embed=embed)
-        
-    except aiohttp.ClientError as e:
-        logger.error(f"Ошибка сети при проверке друзей: {e}")
-        embed = discord.Embed(
-            title="❌ Ошибка сети",
-            description="Не удалось подключиться к Roblox API. Попробуйте позже.",
-            color=COLORS['error']
-        )
-        await status_msg.edit(content=None, embed=embed)
-    except asyncio.TimeoutError:
-        embed = discord.Embed(
-            title="❌ Таймаут",
-            description="Слишком долгий ответ от Roblox API. Попробуйте позже.",
-            color=COLORS['error']
-        )
-        await status_msg.edit(content=None, embed=embed)
-    except Exception as e:
-        logger.error(f"Ошибка проверки друзей: {e}")
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Не удалось проверить друзей. Попробуйте позже.",
-            color=COLORS['error']
-        )
-        await status_msg.edit(content=None, embed=embed)
-
-@bot.command(name='addrobloxtag')
-@is_admin()
-async def add_roblox_tag(ctx, tag: str):
-    """
-    Добавить новую вражескую приписку для Roblox
-    
-    Пример: !addrobloxtag [ENEMY]
-    """
-    global ENEMY_ROBLOX_TAGS
-    
-    if tag in ENEMY_ROBLOX_TAGS:
-        embed = discord.Embed(
-            title="❌ Тег уже существует",
-            description=f"`{tag}` уже есть в списке",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-        return
-    
-    ENEMY_ROBLOX_TAGS.append(tag)
-    
-    embed = discord.Embed(
-        title="✅ Тег добавлен",
-        description=f"`{tag}` теперь считается вражеской припиской в Roblox",
-        color=COLORS['success']
-    )
-    
-    # Показываем первые 10 тегов
-    tags_text = "\n".join([f"• `{t}`" for t in ENEMY_ROBLOX_TAGS[:10]])
-    if len(ENEMY_ROBLOX_TAGS) > 10:
-        tags_text += f"\n*... и ещё {len(ENEMY_ROBLOX_TAGS) - 10}*"
-    
-    embed.add_field(
-        name="📋 Текущие теги",
-        value=tags_text,
-        inline=False
-    )
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name='listrobloxtags')
-@is_admin()
-async def list_roblox_tags(ctx):
-    """Показать все вражеские приписки для Roblox"""
-    
-    embed = discord.Embed(
-        title="📋 Список вражеских приписок Roblox",
-        description=f"Всего: **{len(ENEMY_ROBLOX_TAGS)}**",
-        color=COLORS['info']
-    )
-    
-    # Разбиваем на несколько полей, если много тегов
-    chunk_size = 15
-    for i in range(0, len(ENEMY_ROBLOX_TAGS), chunk_size):
-        chunk = ENEMY_ROBLOX_TAGS[i:i+chunk_size]
-        embed.add_field(
-            name=f"Теги {i+1}-{i+len(chunk)}",
-            value="\n".join([f"`{t}`" for t in chunk]),
-            inline=False
-        )
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name='removerobloxtag')
-@is_admin_or_mod()
-async def remove_roblox_tag(ctx, tag: str):
-    """
-    Удалить вражескую приписку из списка
-    
-    Пример: !removerobloxtag [ENEMY]
-    """
-    global ENEMY_ROBLOX_TAGS
-    
-    if tag not in ENEMY_ROBLOX_TAGS:
-        embed = discord.Embed(
-            title="❌ Тег не найден",
-            description=f"`{tag}` нет в списке",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-        return
-    
-    ENEMY_ROBLOX_TAGS.remove(tag)
-    
-    embed = discord.Embed(
-        title="✅ Тег удален",
-        description=f"`{tag}` удален из списка вражеских приписок",
-        color=COLORS['success']
-    )
-    
-    await ctx.send(embed=embed)
-
-@bot.command(name='linkroblox')
-async def link_roblox(ctx, roblox_username: str):
-    """
-    Привязать свой Roblox-аккаунт к Discord
-    
-    Пример: !linkroblox MyRobloxUsername
-    """
-    
-    # Проверяем, не пустой ли username
-    if not roblox_username or len(roblox_username) > 50:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Имя пользователя должно быть от 1 до 50 символов",
-            color=COLORS['error']
-        )
-        await ctx.send(embed=embed)
-        return
-    
-    status_msg = await ctx.send(f"🔗 Привязываю **{roblox_username}** к вашему аккаунту...")
-    
-    try:
-        # Получаем Roblox ID
-        user_id = await get_roblox_user_id(roblox_username)
-        
-        if not user_id:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"Пользователь **{roblox_username}** не найден в Roblox",
+                title="❌ Слишком много аргументов",
+                description=f"Используйте `{PREFIX}help` для справки по командам",
                 color=COLORS['error']
             )
-            await status_msg.edit(content=None, embed=embed)
-            return
-        
-        # Сохраняем в БД
-        await db.link_roblox(ctx.author.id, user_id, roblox_username)
-        
-        embed = discord.Embed(
-            title="✅ Аккаунт привязан",
-            description=f"Roblox-аккаунт **{roblox_username}** успешно привязан к вашему Discord",
-            color=COLORS['success']
-        )
-        embed.add_field(
-            name="🆔 Roblox ID",
-            value=f"`{user_id}`",
-            inline=True
-        )
-        
-        # Проверяем на вражеские приписки
-        is_enemy, tag = await check_roblox_username(roblox_username)
-        if is_enemy:
-            embed.add_field(
-                name="⚠️ ВНИМАНИЕ",
-                value=f"Обнаружена вражеская приписка: `{tag}`",
-                inline=False
-            )
-        
-        await status_msg.edit(content=None, embed=embed)
-        
-    except aiohttp.ClientError as e:
-        logger.error(f"Ошибка сети при привязке Roblox: {e}")
-        embed = discord.Embed(
-            title="❌ Ошибка сети",
-            description="Не удалось подключиться к Roblox API. Попробуйте позже.",
-            color=COLORS['error']
-        )
-        await status_msg.edit(content=None, embed=embed)
-    except Exception as e:
-        logger.error(f"Ошибка привязки Roblox: {e}")
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Не удалось привязать аккаунт. Попробуйте позже.",
-            color=COLORS['error']
-        )
-        await status_msg.edit(content=None, embed=embed)
-
-@bot.command(name='myroblox')
-async def my_roblox(ctx):
-    """Показать свой привязанный Roblox-аккаунт"""
-    
-    data = await db.get_roblox_link(ctx.author.id)
-    
-    if not data:
-        embed = discord.Embed(
-            title="❌ Аккаунт не привязан",
-            description=f"Используйте `{PREFIX}linkroblox username` чтобы привязать Roblox-аккаунт",
-            color=COLORS['info']
-        )
-        await ctx.send(embed=embed)
-        return
-    
-    # Проверяем на вражеские приписки
-    is_enemy, tag = await check_roblox_username(data['roblox_username'])
-    
-    embed = discord.Embed(
-        title="🎮 Ваш Roblox-аккаунт",
-        color=COLORS['error'] if is_enemy else COLORS['success']
-    )
-    
-    embed.add_field(
-        name="👤 Имя",
-        value=data['roblox_username'],
-        inline=True
-    )
-    
-    embed.add_field(
-        name="🆔 ID",
-        value=f"`{data['roblox_id']}`",
-        inline=True
-    )
-    
-    embed.add_field(
-        name="📅 Привязан",
-        value=data['linked_at'].strftime('%d.%m.%Y'),
-        inline=True
-    )
-    
-    if is_enemy:
-        embed.add_field(
-            name="⚠️ СТАТУС",
-            value=f"ВРАГ (найдена приписка: {tag})",
-            inline=False
-        )
-    
-    await ctx.send(embed=embed)
-
-# ========== КОМАНДЫ ДЛЯ КЛАНОВ С ГИФКАМИ ==========
-
-async def show_clans_by_type(ctx, clan_type: str, title: str):
-    clans = await clan_manager.get_clans_by_type(ctx.guild.id, clan_type)
-    
-    if not clans:
-        embed = discord.Embed(
-            title=title,
-            description=f"❌ В этой категории пока нет кланов.\nДобавьте с помощью `!addclan {clan_type} \"название\"`",
-            color=COLORS['info']
-        )
-        embed.set_image(url=GIFS.get(clan_type, GIFS['peace']))
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title=title,
-        color=COLORS['info']
-    )
-    
-    embed.set_image(url=GIFS.get(clan_type, GIFS['peace']))
-    
-    for clan in clans:
-        clan_name = clan['name']
-        if clan['tag']:
-            clan_name = f"[{clan['tag']}] {clan_name}"
-        
-        if clan['description']:
-            embed.add_field(
-                name=clan_name,
-                value=clan['description'],
-                inline=False
-            )
-        else:
-            embed.add_field(
-                name=clan_name,
-                value="​",
-                inline=False
-            )
-    
-    count = len(clans)
-    total_clans = await clan_manager.get_clan_count(ctx.guild.id)
-    embed.set_footer(text=f"Всего в категории: {count} | Всего кланов на сервере: {total_clans}")
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='allyclans')
-async def ally_clans(ctx):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="⏳ Загрузка данных",
-            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    await show_clans_by_type(ctx, 'ally', '🤝 Союзные кланы (ALLY)')
-
-@bot.command(name='enemyclans')
-async def enemy_clans(ctx):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="⏳ Загрузка данных",
-            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    await show_clans_by_type(ctx, 'enemy', '⚔️ Вражеские кланы (ENEMY)')
-
-@bot.command(name='peaceclans')
-async def peace_clans(ctx):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="⏳ Загрузка данных",
-            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    await show_clans_by_type(ctx, 'peace', '🕊️ Нейтральные кланы (PEACE)')
-
-@bot.command(name='allclans')
-async def all_clans(ctx):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="⏳ Загрузка данных",
-            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    clans = await clan_manager.get_all_clans(ctx.guild.id)
-    
-    if not clans:
-        embed = discord.Embed(
-            title="📋 Список кланов пуст",
-            description="Добавьте кланы с помощью команды `!addclan`",
-            color=COLORS['info']
-        )
-        embed.set_image(url=GIFS['peace'])
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="📋 Все кланы на сервере",
-        description=f"Всего кланов: **{len(clans)}**",
-        color=COLORS['info']
-    )
-    
-    embed.set_image(url=GIFS['peace'])
-    
-    ally_clans_list = [c for c in clans if c['clan_type'] == 'ally']
-    enemy_clans_list = [c for c in clans if c['clan_type'] == 'enemy']
-    peace_clans_list = [c for c in clans if c['clan_type'] == 'peace']
-    
-    if ally_clans_list:
-        ally_text = []
-        for clan in ally_clans_list[:10]:
-            name = clan['name']
-            if clan['tag']:
-                name = f"[{clan['tag']}] {name}"
-            ally_text.append(f"• {name}")
-        
-        if len(ally_clans_list) > 10:
-            ally_text.append(f"*... и ещё {len(ally_clans_list) - 10}*")
-        
-        embed.add_field(
-            name=f"🤝 Союзники ({len(ally_clans_list)})",
-            value="\n".join(ally_text) if ally_text else "​",
-            inline=False
-        )
-    
-    if peace_clans_list:
-        peace_text = []
-        for clan in peace_clans_list[:10]:
-            name = clan['name']
-            if clan['tag']:
-                name = f"[{clan['tag']}] {name}"
-            peace_text.append(f"• {name}")
-        
-        if len(peace_clans_list) > 10:
-            peace_text.append(f"*... и ещё {len(peace_clans_list) - 10}*")
-        
-        embed.add_field(
-            name=f"🕊️ Нейтральные ({len(peace_clans_list)})",
-            value="\n".join(peace_text) if peace_text else "​",
-            inline=False
-        )
-    
-    if enemy_clans_list:
-        enemy_text = []
-        for clan in enemy_clans_list[:10]:
-            name = clan['name']
-            if clan['tag']:
-                name = f"[{clan['tag']}] {name}"
-            enemy_text.append(f"• {name}")
-        
-        if len(enemy_clans_list) > 10:
-            enemy_text.append(f"*... и ещё {len(enemy_clans_list) - 10}*")
-        
-        embed.add_field(
-            name=f"⚔️ Враги ({len(enemy_clans_list)})",
-            value="\n".join(enemy_text) if enemy_text else "​",
-            inline=False
-        )
-    
-    if len(clans) > 30:
-        embed.add_field(
-            name="📊 Статистика",
-            value=f"Для просмотра полного списка используйте:\n"
-                  f"• `!allyclans` - союзники\n"
-                  f"• `!enemyclans` - враги\n"
-                  f"• `!peaceclans` - нейтральные",
-            inline=False
-        )
-    
-    embed.set_footer(text="Для добавления кланов используйте !addclan")
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='setclangif')
-@is_admin()
-async def set_clan_gif(ctx, clan_type: str, gif_url: str):
-    """
-    Установить гифку для типа клана
-    
-    Типы: ally, enemy, peace
-    
-    Пример:
-    !setclangif ally https://ссылка_на_гифку.gif
-    """
-    valid_types = ['ally', 'enemy', 'peace']
-    
-    if clan_type.lower() not in valid_types:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Доступные типы: {', '.join(valid_types)}",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    GIFS[clan_type.lower()] = gif_url
-    
-    embed = discord.Embed(
-        title="✅ Гифка обновлена",
-        description=f"Для типа **{clan_type}** установлена новая гифка",
-        color=COLORS['success']
-    )
-    embed.set_image(url=gif_url)
-    
-    await safe_send(ctx, embed=embed)
-
-# ========== OAuth2 КОМАНДЫ ==========
-
-@bot.command(name='oauth')
-async def oauth_command(ctx):
-    """Получить ссылку для OAuth2 проверки всех серверов пользователя"""
-    embed = discord.Embed(
-        title="🔍 OAuth2 Проверка серверов",
-        description="Перейдите по ссылке ниже, чтобы проверить ВСЕ серверы, где состоит пользователь (даже те, где нет бота)",
-        color=COLORS['info']
-    )
-    
-    oauth_url = f"https://husseinbot2.onrender.com/oauth2/login"
-    
-    embed.add_field(
-        name="📋 Инструкция",
-        value="1. Перейдите по ссылке\n"
-              "2. Авторизуйтесь через Discord\n"
-              "3. Увидите полный список всех серверов\n\n"
-              f"🔗 **Ссылка**: [Нажмите для проверки]({oauth_url})",
-        inline=False
-    )
-    
-    embed.set_footer(text="Внимание: сайт запросит доступ к списку ваших серверов")
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='checkoauth')
-@is_admin_or_mod()
-async def check_oauth_user(ctx, user: discord.User):
-    """
-    Проверить данные OAuth2 пользователя (если он авторизовался)
-    
-    Пример: !checkoauth @user
-    """
-    data = await db.get_oauth_data(user.id)
-    
-    if not data:
-        embed = discord.Embed(
-            title="❌ Данные не найдены",
-            description=f"Пользователь {user.mention} еще не авторизовался через OAuth2",
-            color=COLORS['error']
-        )
-        embed.add_field(
-            name="📋 Инструкция",
-            value=f"Попросите пользователя перейти по ссылке `{PREFIX}oauth` и авторизоваться",
-            inline=False
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Парсим сохраненные данные о серверах
-    try:
-        guilds_data = eval(data['guilds_data'])
-    except:
-        guilds_data = []
-    
-    # Анализируем серверы
-    enemy_servers = []
-    ally_servers = []
-    neutral_servers = []
-    other_servers = []
-    
-    for guild in guilds_data:
-        guild_id = int(guild['id'])
-        
-        if guild_id in ENEMY_SERVERS.values():
-            enemy_servers.append(guild)
-        elif guild_id in ALLY_SERVERS.values():
-            ally_servers.append(guild)
-        elif guild_id in NEUTRAL_SERVERS.values():
-            neutral_servers.append(guild)
-        else:
-            name_lower = guild['name'].lower()
-            if 'enemy' in name_lower or 'враг' in name_lower:
-                enemy_servers.append(guild)
-            elif 'ally' in name_lower or 'союз' in name_lower:
-                ally_servers.append(guild)
-            elif 'peace' in name_lower or 'нейтр' in name_lower:
-                neutral_servers.append(guild)
-            else:
-                other_servers.append(guild)
-    
-    embed = discord.Embed(
-        title=f"🔍 OAuth2 данные {user.display_name}",
-        description=f"Последнее обновление: {data['last_updated'].strftime('%d.%m.%Y %H:%M')}",
-        color=COLORS['info']
-    )
-    
-    embed.add_field(
-        name="📊 Статистика",
-        value=f"Всего серверов: **{len(guilds_data)}**",
-        inline=False
-    )
-    
-    if enemy_servers:
-        enemy_text = "\n".join([f"• **{g['name']}**" for g in enemy_servers[:5]])
-        if len(enemy_servers) > 5:
-
-@bot.command(name='checkoauth')
-@is_admin_or_mod()
-async def check_oauth_user(ctx, user: discord.User):
-    """
-    Проверить данные OAuth2 пользователя (если он авторизовался)
-    Показывает ВСЕ серверы пользователя
-    
-    Пример: !checkoauth @user
-    """
-    data = await db.get_oauth_data(user.id)
-    
-    if not data:
-        embed = discord.Embed(
-            title="❌ Данные не найдены",
-            description=f"Пользователь {user.mention} еще не авторизовался через OAuth2",
-            color=COLORS['error']
-        )
-        embed.add_field(
-            name="📋 Инструкция",
-            value=f"Попросите пользователя перейти по ссылке `{PREFIX}oauth` и авторизоваться",
-            inline=False
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Парсим сохраненные данные о серверах
-    try:
-        import ast
-        guilds_data = ast.literal_eval(data['guilds_data'])
-        if not isinstance(guilds_data, list):
-            guilds_data = []
-    except:
-        guilds_data = []
-    
-    if not guilds_data:
-        embed = discord.Embed(
-            title="ℹ️ Нет данных о серверах",
-            description=f"У пользователя {user.mention} нет сохраненных серверов",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Анализируем серверы
-    enemy_servers = []
-    ally_servers = []
-    neutral_servers = []
-    other_servers = []
-    
-    # Сортируем серверы по названию
-    sorted_guilds = sorted(guilds_data, key=lambda x: x.get('name', '').lower())
-    
-    for guild in sorted_guilds:
-        guild_id = int(guild.get('id', 0))
-        guild_name = guild.get('name', 'Неизвестно')
-        guild_owner = guild.get('owner', False)
-        
-        server_info = f"{guild_name} ({'👑 Владелец' if guild_owner else 'участник'})"
-        
-        if guild_id in ENEMY_SERVERS.values():
-            enemy_servers.append(server_info)
-        elif guild_id in ALLY_SERVERS.values():
-            ally_servers.append(server_info)
-        elif guild_id in NEUTRAL_SERVERS.values():
-            neutral_servers.append(server_info)
-        else:
-            # Если не нашли по ID, проверяем по названию
-            name_lower = guild_name.lower()
-            if 'enemy' in name_lower or 'враг' in name_lower:
-                enemy_servers.append(f"⚠️ {server_info}")
-            elif 'ally' in name_lower or 'союз' in name_lower:
-                ally_servers.append(f"🤝 {server_info}")
-            elif 'peace' in name_lower or 'нейтр' in name_lower:
-                neutral_servers.append(f"🕊️ {server_info}")
-            else:
-                other_servers.append(server_info)
-    
-    # Создаем embed с результатами
-    embed = discord.Embed(
-        title=f"🔍 OAuth2 данные {user.display_name}",
-        description=f"**Последнее обновление:** {data['last_updated'].strftime('%d.%m.%Y %H:%M')}\n"
-                   f"**Всего серверов:** {len(guilds_data)}",
-        color=COLORS['info']
-    )
-    
-    embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
-    
-    # Функция для добавления поля с серверами (с учетом лимита Discord)
-    def add_server_field(name, servers, emoji):
-        if not servers:
-            return
-        
-        # Discord позволяет максимум 1024 символа в поле
-        server_text = "\n".join(servers)
-        
-        # Если текст слишком длинный, разбиваем на несколько полей
-        if len(server_text) > 1024:
-            # Разбиваем на chunks по 20 серверов
-            chunk_size = 20
-            for i in range(0, len(servers), chunk_size):
-                chunk = servers[i:i+chunk_size]
-                chunk_text = "\n".join(chunk)
-                field_name = f"{emoji} {name} (часть {i//chunk_size + 1})"
-                embed.add_field(
-                    name=field_name,
-                    value=chunk_text[:1024],  # Обрезаем до лимита
-                    inline=False
-                )
-        else:
-            embed.add_field(
-                name=f"{emoji} {name} ({len(servers)})",
-                value=server_text or "Нет серверов",
-                inline=False
-            )
-    
-    # Добавляем все категории
-    if enemy_servers:
-        add_server_field("ВРАЖЕСКИЕ СЕРВЕРЫ", enemy_servers, "⚠️")
-    
-    if ally_servers:
-        add_server_field("СОЮЗНЫЕ СЕРВЕРЫ", ally_servers, "🤝")
-    
-    if neutral_servers:
-        add_server_field("НЕЙТРАЛЬНЫЕ СЕРВЕРЫ", neutral_servers, "🕊️")
-    
-    if other_servers:
-        add_server_field("ДРУГИЕ СЕРВЕРЫ", other_servers, "📌")
-    
-    embed.set_footer(text=f"ID: {user.id} | Для полного списка используйте OAuth2 ссылку")
-    
-    await safe_send(ctx, embed=embed)
-
-
-@bot.command(name='checkoauthfull')
-@is_admin_or_mod()
-async def check_oauth_full(ctx, user: discord.User):
-    """
-    Показать ПОЛНЫЙ список серверов пользователя (в файле, если много)
-    
-    Пример: !checkoauthfull @user
-    """
-    data = await db.get_oauth_data(user.id)
-    
-    if not data:
-        embed = discord.Embed(
-            title="❌ Данные не найдены",
-            description=f"Пользователь {user.mention} еще не авторизовался",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    try:
-        import ast
-        guilds_data = ast.literal_eval(data['guilds_data'])
-    except:
-        guilds_data = []
-    
-    if not guilds_data:
-        await safe_send(ctx, "ℹ️ Нет данных о серверах")
-        return
-    
-    # Сортируем серверы по названию
-    sorted_guilds = sorted(guilds_data, key=lambda x: x.get('name', '').lower())
-    
-    # Если серверов меньше 50, показываем в embed
-    if len(sorted_guilds) <= 50:
-        embed = discord.Embed(
-            title=f"📋 Все серверы {user.display_name}",
-            description=f"Всего: **{len(sorted_guilds)}**",
-            color=COLORS['info']
-        )
-        
-        servers_text = []
-        for guild in sorted_guilds:
-            name = guild.get('name', 'Неизвестно')
-            owner = "👑" if guild.get('owner', False) else ""
-            servers_text.append(f"{owner} {name}")
-        
-        # Разбиваем на несколько полей если нужно
-        chunk_size = 20
-        for i in range(0, len(servers_text), chunk_size):
-            chunk = servers_text[i:i+chunk_size]
-            embed.add_field(
-                name=f"Серверы {i+1}-{i+len(chunk)}",
-                value="\n".join(chunk),
-                inline=False
-            )
-        
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Если серверов больше 50, отправляем файлом
-    filename = f"servers_{user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
-    
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(f"Список серверов пользователя {user.display_name} (ID: {user.id})\n")
-        f.write(f"Всего серверов: {len(sorted_guilds)}\n")
-        f.write("=" * 50 + "\n\n")
-        
-        for i, guild in enumerate(sorted_guilds, 1):
-            name = guild.get('name', 'Неизвестно')
-            guild_id = guild.get('id', '?')
-            owner = "👑 ВЛАДЕЛЕЦ" if guild.get('owner', False) else "участник"
-            f.write(f"{i}. {name}\n")
-            f.write(f"   ID: {guild_id} | {owner}\n\n")
-    
-    file = discord.File(filename)
-    embed = discord.Embed(
-        title=f"📁 Полный список серверов {user.display_name}",
-        description=f"Всего серверов: **{len(sorted_guilds)}**\nФайл отправлен ниже",
-        color=COLORS['success']
-    )
-    await safe_send(ctx, embed=embed, file=file)
-    
-    # Удаляем временный файл
-    os.remove(filename)
-
-@bot.command(name='refreshoauth')
-async def refresh_oauth_data(ctx):
-    """
-    Обновить свои OAuth2 данные (если уже авторизовались)
-    """
-    data = await db.get_oauth_data(ctx.author.id)
-    
-    if not data:
-        embed = discord.Embed(
-            title="❌ Данные не найдены",
-            description=f"Сначала авторизуйтесь через `{PREFIX}oauth`",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="⏳ Обновление данных",
-        description="Перенаправляю на Discord для обновления токена...",
-        color=COLORS['info']
-    )
-    await safe_send(ctx, embed=embed)
-    
-    oauth_url = f"https://husseinbot2.onrender.com/oauth2/login"
-    await ctx.send(f"🔗 Перейдите по ссылке для обновления: {oauth_url}")
-
-# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
-
-@bot.command(name='addclan')
-@is_admin()
-async def add_clan(ctx, clan_type: str, name: str, tag: str = None, *, description: str = None):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="❌ Система не готова",
-            description="База данных еще подключается. Попробуйте через несколько секунд.",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    valid_types = ['ally', 'enemy', 'peace']
-    clan_type = clan_type.lower()
-    
-    if clan_type not in valid_types:
-        embed = discord.Embed(
-            title="❌ Неверный тип клана",
-            description=f"Доступные типы: {', '.join(valid_types)}",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    success, message = await clan_manager.add_clan(
-        ctx.guild.id, name, clan_type, tag, description, ctx.author.id
-    )
-    
-    if success:
-        embed = discord.Embed(
-            title=f"{clan_manager.get_type_emoji(clan_type)} Клан добавлен",
-            description=message,
-            color=COLORS['success']
-        )
-        
-        embed.add_field(name="🏷️ Название", value=f"**{name}**", inline=True)
-        if tag:
-            embed.add_field(name="📌 Тег", value=f"`[{tag}]`", inline=True)
-        embed.add_field(name="📂 Категория", value=clan_manager.get_type_name(clan_type), inline=True)
-        
-        if description:
-            embed.add_field(name="📝 Описание", value=description, inline=False)
-        
-        embed.add_field(name="👤 Добавил", value=ctx.author.mention, inline=True)
-        
-        count = await clan_manager.get_clan_count(ctx.guild.id)
-        embed.set_footer(text=f"Всего кланов в базе: {count}")
-    else:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=message,
-            color=COLORS['error']
-        )
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='removeclan')
-@is_admin()
-async def remove_clan(ctx, clan_type: str = None, *, name: str):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="❌ Система не готова",
-            description="База данных еще подключается. Попробуйте через несколько секунд.",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    if clan_type and clan_type.lower() not in ['ally', 'enemy', 'peace']:
-        name = f"{clan_type} {name}"
-        clan_type = None
-    
-    if clan_type:
-        clan_type = clan_type.lower()
-    
-    embed = discord.Embed(
-        title="⚠️ Подтверждение удаления",
-        description=f"Вы уверены, что хотите удалить клан **{name}**" + 
-                   (f" из категории **{clan_manager.get_type_name(clan_type)}**?" if clan_type else " из всех категорий?"),
-        color=COLORS['warning']
-    )
-    
-    view = discord.ui.View(timeout=30)
-    
-    async def confirm_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
-            return
-        
-        success, message = await clan_manager.remove_clan(ctx.guild.id, name, clan_type)
-        
-        if success:
-            result_embed = discord.Embed(
-                title="✅ Клан удален",
-                description=message,
-                color=COLORS['success']
-            )
-        else:
-            result_embed = discord.Embed(
-                title="❌ Ошибка",
-                description=message,
-                color=COLORS['error']
-            )
-        
-        await interaction.response.edit_message(embed=result_embed, view=None)
-    
-    async def cancel_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
-            return
-        
-        cancel_embed = discord.Embed(
-            title="❌ Удаление отменено",
-            color=COLORS['warning']
-        )
-        await interaction.response.edit_message(embed=cancel_embed, view=None)
-    
-    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
-    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
-    
-    confirm_button.callback = confirm_callback
-    cancel_button.callback = cancel_callback
-    
-    view.add_item(confirm_button)
-    view.add_item(cancel_button)
-    
-    await safe_send(ctx, embed=embed, view=view)
-
-@bot.command(name='claninfo')
-async def clan_info(ctx, clan_type: str, *, name: str):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="⏳ Загрузка данных",
-            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    valid_types = ['ally', 'enemy', 'peace']
-    clan_type = clan_type.lower()
-    
-    if clan_type not in valid_types:
-        embed = discord.Embed(
-            title="❌ Неверный тип клана",
-            description=f"Доступные типы: {', '.join(valid_types)}",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    clans = await clan_manager.get_clans_by_type(ctx.guild.id, clan_type)
-    clan = None
-    for c in clans:
-        if c['name'].lower() == name.lower():
-            clan = c
-            break
-    
-    if not clan:
-        embed = discord.Embed(
-            title="❌ Клан не найден",
-            description=f"Клан **{name}** не найден в категории **{clan_manager.get_type_name(clan_type)}**",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title=f"{clan_manager.get_type_emoji(clan_type)} Информация о клане {clan['name']}",
-        color=COLORS['info']
-    )
-    
-    if clan['tag']:
-        embed.add_field(name="📌 Тег", value=f"`[{clan['tag']}]`", inline=True)
-    
-    embed.add_field(name="📂 Категория", value=clan_manager.get_type_name(clan_type), inline=True)
-    
-    if clan['description']:
-        embed.add_field(name="📝 Описание", value=clan['description'], inline=False)
-    
-    try:
-        added_by = await ctx.guild.fetch_member(clan['added_by'])
-        added_by_name = added_by.display_name if added_by else f"ID: {clan['added_by']}"
-    except:
-        added_by_name = f"ID: {clan['added_by']}"
-    
-    embed.add_field(name="👤 Добавил", value=added_by_name, inline=True)
-    embed.add_field(name="🕒 Дата добавления", value=clan['added_at'].strftime('%d.%m.%Y %H:%M'), inline=True)
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='editclan')
-@is_admin()
-async def edit_clan(ctx, clan_type: str, name: str, field: str, *, value: str):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="❌ Система не готова",
-            description="База данных еще подключается. Попробуйте через несколько секунд.",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    valid_types = ['ally', 'enemy', 'peace']
-    clan_type = clan_type.lower()
-    
-    if clan_type not in valid_types:
-        embed = discord.Embed(
-            title="❌ Неверный тип клана",
-            description=f"Доступные типы: {', '.join(valid_types)}",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    field = field.lower()
-    
-    if field == 'tag':
-        success, message = await clan_manager.update_clan_tag(
-            ctx.guild.id, name, clan_type, value
-        )
-        embed = discord.Embed(
-            title="✅ Тег обновлен" if success else "❌ Ошибка",
-            description=message,
-            color=COLORS['success'] if success else COLORS['error']
-        )
-    elif field == 'desc' or field == 'description':
-        success, message = await clan_manager.update_clan_description(
-            ctx.guild.id, name, clan_type, value
-        )
-        embed = discord.Embed(
-            title="✅ Описание обновлено" if success else "❌ Ошибка",
-            description=message,
-            color=COLORS['success'] if success else COLORS['error']
-        )
-    else:
-        embed = discord.Embed(
-            title="❌ Неверное поле",
-            description=f"Доступные поля: tag, desc",
-            color=COLORS['error']
-        )
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='clearclans')
-@is_admin()
-async def clear_clans(ctx):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="❌ Система не готова",
-            description="База данных еще подключается. Попробуйте через несколько секунд.",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    count = await clan_manager.get_clan_count(ctx.guild.id)
-    
-    if count == 0:
-        embed = discord.Embed(
-            title="ℹ️ Нет кланов",
-            description="На сервере нет кланов для удаления",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
-        description=f"Вы уверены, что хотите удалить ВСЕ кланы ({count} шт.)?\nЭто действие необратимо!",
-        color=COLORS['error']
-    )
-    
-    view = discord.ui.View(timeout=30)
-    
-    async def confirm_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
-            return
-        
-        await clan_manager.clear_all_clans(ctx.guild.id)
-        
-        confirm_embed = discord.Embed(
-            title="✅ Все кланы удалены",
-            description=f"Удалено {count} кланов",
-            color=COLORS['success']
-        )
-        await interaction.response.edit_message(embed=confirm_embed, view=None)
-    
-    async def cancel_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
-            return
-        
-        cancel_embed = discord.Embed(
-            title="❌ Удаление отменено",
-            color=COLORS['warning']
-        )
-        await interaction.response.edit_message(embed=cancel_embed, view=None)
-    
-    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
-    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
-    
-    confirm_button.callback = confirm_callback
-    cancel_button.callback = cancel_callback
-    
-    view.add_item(confirm_button)
-    view.add_item(cancel_button)
-    
-    await safe_send(ctx, embed=embed, view=view)
-
-@bot.command(name='searchclan')
-async def search_clan(ctx, *, search_term: str):
-    if clan_manager is None:
-        embed = discord.Embed(
-            title="⏳ Загрузка данных",
-            description="Система кланов инициализируется. Попробуйте через несколько секунд.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    clans = await clan_manager.search_clan(ctx.guild.id, search_term)
-    
-    if not clans:
-        embed = discord.Embed(
-            title="🔍 Результаты поиска",
-            description=f"Кланы по запросу **{search_term}** не найдены",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title=f"🔍 Результаты поиска: {search_term}",
-        description=f"Найдено кланов: **{len(clans)}**",
-        color=COLORS['info']
-    )
-    
-    for clan_type in ['ally', 'peace', 'enemy']:
-        type_clans = [c for c in clans if c['clan_type'] == clan_type]
-        if type_clans:
-            clan_names = []
-            for clan in type_clans[:5]:
-                name = clan['name']
-                if clan['tag']:
-                    name = f"[{clan['tag']}] {name}"
-                clan_names.append(f"• {name}")
+            await safe_send(ctx, embed=embed)
             
-            if len(type_clans) > 5:
-                clan_names.append(f"*... и ещё {len(type_clans) - 5}*")
-            
-            embed.add_field(
-                name=f"{clan_manager.get_type_emoji(clan_type)} {clan_manager.get_type_name(clan_type)} ({len(type_clans)})",
-                value="\n".join(clan_names),
-                inline=False
-            )
-    
-    await safe_send(ctx, embed=embed)
-
-# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КАНАЛАМИ ==========
-
-@bot.command(name='addchannel')
-@is_admin()
-async def add_channel(ctx, channel: discord.TextChannel):
-    success = await db.add_channel_to_list(
-        ctx.guild.id, channel.id, channel.name, ctx.author.id
-    )
-    
-    if success:
-        embed = discord.Embed(
-            title="✅ Канал добавлен",
-            description=f"Канал {channel.mention} добавлен в список для блокировки",
-            color=COLORS['success']
-        )
-        embed.add_field(name="Название", value=f"`{channel.name}`", inline=True)
-        embed.add_field(name="ID", value=f"`{channel.id}`", inline=True)
-        embed.add_field(name="Добавил", value=ctx.author.mention, inline=True)
-        
-        count = await db.get_channel_count(ctx.guild.id)
-        embed.set_footer(text=f"Всего каналов в списке: {count}")
-    else:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Не удалось добавить канал в список",
-            color=COLORS['error']
-        )
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='removechannel')
-@is_admin()
-async def remove_channel(ctx, channel: Optional[discord.TextChannel] = None):
-    if channel:
-        success = await db.remove_channel_from_list(ctx.guild.id, channel.id)
-        
-        if success:
+        elif isinstance(error, commands.CommandOnCooldown):
             embed = discord.Embed(
-                title="✅ Канал удален",
-                description=f"Канал {channel.mention} удален из списка",
-                color=COLORS['success']
-            )
-        else:
-            embed = discord.Embed(
-                title="❌ Ошибка",
-                description=f"Не удалось удалить канал {channel.mention}",
-                color=COLORS['error']
-            )
-        await safe_send(ctx, embed=embed)
-    else:
-        embed = discord.Embed(
-            title="⚠️ Удаление всех каналов",
-            description="Вы уверены, что хотите удалить ВСЕ каналы из списка?",
-            color=COLORS['warning']
-        )
-        
-        view = discord.ui.View(timeout=30)
-        
-        async def confirm_callback(interaction):
-            if interaction.user != ctx.author:
-                await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
-                return
-            
-            success = await db.remove_channel_from_list(ctx.guild.id)
-            
-            if success:
-                confirm_embed = discord.Embed(
-                    title="✅ Все каналы удалены",
-                    description="Все каналы удалены из списка",
-                    color=COLORS['success']
-                )
-            else:
-                confirm_embed = discord.Embed(
-                    title="❌ Ошибка",
-                    description="Не удалось удалить каналы",
-                    color=COLORS['error']
-                )
-            
-            await interaction.response.edit_message(embed=confirm_embed, view=None)
-        
-        async def cancel_callback(interaction):
-            if interaction.user != ctx.author:
-                await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
-                return
-            
-            cancel_embed = discord.Embed(
-                title="❌ Отменено",
-                description="Удаление каналов отменено",
+                title="⏳ Команда на перезарядке",
+                description=f"Попробуйте снова через {error.retry_after:.1f} секунд",
                 color=COLORS['warning']
             )
-            await interaction.response.edit_message(embed=cancel_embed, view=None)
-        
-        confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
-        cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
-        
-        confirm_button.callback = confirm_callback
-        cancel_button.callback = cancel_callback
-        
-        view.add_item(confirm_button)
-        view.add_item(cancel_button)
-        
-        await safe_send(ctx, embed=embed, view=view)
-
-@bot.command(name='listchannels')
-@is_admin_or_mod()
-async def list_channels(ctx):
-    channels = await db.get_channel_list(ctx.guild.id)
-    
-    if not channels:
-        embed = discord.Embed(
-            title="📋 Список каналов пуст",
-            description="Добавьте каналы с помощью `!addchannel #канал`",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="📋 Список каналов для блокировки",
-        color=COLORS['info']
-    )
-    
-    for i, channel_data in enumerate(channels, 1):
-        channel = ctx.guild.get_channel(channel_data['channel_id'])
-        channel_mention = channel.mention if channel else f"`{channel_data['channel_name']}`"
-        
-        try:
-            added_by = await ctx.guild.fetch_member(channel_data['added_by'])
-            added_by_name = added_by.display_name if added_by else f"ID: {channel_data['added_by']}"
-        except:
-            added_by_name = f"ID: {channel_data['added_by']}"
-        
-        embed.add_field(
-            name=f"{i}. {channel_data['channel_name']}",
-            value=f"Канал: {channel_mention}\n"
-                  f"ID: `{channel_data['channel_id']}`\n"
-                  f"Добавил: {added_by_name}\n"
-                  f"Дата: {channel_data['added_at'].strftime('%d.%m.%Y %H:%M')}",
-            inline=False
-        )
-    
-    count = len(channels)
-    embed.set_footer(text=f"Всего каналов: {count}")
-    
-    await safe_send(ctx, embed=embed)
-
-# ========== КОМАНДЫ ДЛЯ БЛОКИРОВКИ КАНАЛОВ ==========
-
-@bot.command(name='lockchannels')
-@is_admin()
-async def lock_channels(ctx, role: discord.Role, lock_type: str = "send"):
-    lock_types = ['send', 'view', 'both']
-    
-    if lock_type.lower() not in lock_types:
-        embed = discord.Embed(
-            title="❌ Неверный тип блокировки",
-            description=f"Доступные типы: {', '.join(lock_types)}",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="🔒 Блокировка каналов",
-        description=f"Начинаю блокировку каналов для роли {role.mention}...",
-        color=COLORS['warning']
-    )
-    
-    lock_info = {
-        'send': "📝 Запрещено писать, ставить реакции и прикреплять файлы",
-        'view': "👁️ Запрещено читать и писать (канал скрыт)",
-        'both': "🚫 Полная блокировка"
-    }
-    
-    embed.add_field(name="Тип блокировки", value=lock_info[lock_type.lower()], inline=False)
-    
-    message = await safe_send(ctx, embed=embed)
-    if not message:
-        return
-    
-    results = await lock_all_channels_in_list(ctx.guild, role, lock_type.lower())
-    
-    success_count = sum(1 for r in results if "✅" in r)
-    warning_count = sum(1 for r in results if "⚠️" in r)
-    error_count = sum(1 for r in results if "❌" in r)
-    
-    final_embed = discord.Embed(
-        title="✅ Блокировка завершена",
-        color=COLORS['success'] if error_count == 0 else COLORS['warning']
-    )
-    
-    final_embed.add_field(
-        name="📊 Результаты",
-        value=f"✅ Успешно: {success_count} каналов\n"
-              f"⚠️ С предупреждениями: {warning_count} каналов\n"
-              f"❌ Ошибки: {error_count} каналов",
-        inline=False
-    )
-    
-    if len(results) <= 10:
-        final_embed.add_field(
-            name="📝 Детали",
-            value="\n".join(results[:10]),
-            inline=False
-        )
-    else:
-        final_embed.add_field(
-            name="ℹ️ Информация",
-            value=f"Обработано {len(results)} каналов",
-            inline=False
-        )
-    
-    final_embed.add_field(
-        name="🎯 Для роли",
-        value=role.mention,
-        inline=True
-    )
-    
-    final_embed.add_field(
-        name="👤 Заблокировал",
-        value=ctx.author.mention,
-        inline=True
-    )
-    
-    final_embed.set_footer(text=f"Тип блокировки: {lock_type.upper()}")
-    
-    await safe_edit(message, embed=final_embed)
-
-@bot.command(name='unlockchannels')
-@is_admin_or_mod()
-async def unlock_channels(ctx, role: Optional[discord.Role] = None):
-    if role:
-        embed = discord.Embed(
-            title="🔓 Разблокировка каналов",
-            description=f"Начинаю разблокировку каналов для роли {role.mention}...",
-            color=COLORS['info']
-        )
-    else:
-        embed = discord.Embed(
-            title="🔓 Полная разблокировка",
-            description="Начинаю полную разблокировку всех каналов...",
-            color=COLORS['info']
-        )
-    
-    message = await safe_send(ctx, embed=embed)
-    if not message:
-        return
-    
-    results = await unlock_all_channels_in_list(ctx.guild, role)
-    
-    success_count = sum(1 for r in results if "✅" in r)
-    warning_count = sum(1 for r in results if "⚠️" in r)
-    error_count = sum(1 for r in results if "❌" in r)
-    
-    final_embed = discord.Embed(
-        title="✅ Разблокировка завершена",
-        color=COLORS['success'] if error_count == 0 else COLORS['warning']
-    )
-    
-    if role:
-        final_embed.description = f"Каналы разблокированы для роли {role.mention}"
-    else:
-        final_embed.description = "Все каналы полностью разблокированы"
-    
-    final_embed.add_field(
-        name="📊 Результаты",
-        value=f"✅ Успешно: {success_count} каналов\n"
-              f"⚠️ С предупреждениями: {warning_count} каналов\n"
-              f"❌ Ошибки: {error_count} каналов",
-        inline=False
-    )
-    
-    if len(results) <= 10:
-        final_embed.add_field(
-            name="📝 Детали",
-            value="\n".join(results[:10]),
-            inline=False
-        )
-    
-    final_embed.add_field(
-        name="👤 Разблокировал",
-        value=ctx.author.mention,
-        inline=True
-    )
-    
-    await safe_edit(message, embed=final_embed)
-
-@bot.command(name='clearlocks')
-@is_admin_or_mod()
-async def clear_locks(ctx):
-    locks = await db.get_channel_locks(ctx.guild.id)
-    
-    if not locks:
-        embed = discord.Embed(
-            title="ℹ️ Нет активных блокировок",
-            description="На сервере нет активных блокировок каналов",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="🗑️ Удаление всех блокировок",
-        description=f"Вы уверены, что хотите удалить ВСЕ блокировки каналов ({len(locks)} шт.)?\nЭто действие необратимо!",
-        color=COLORS['error']
-    )
-    
-    view = discord.ui.View(timeout=30)
-    
-    async def confirm_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
-            return
-        
-        await db.clear_all_locks(ctx.guild.id)
-        
-        for lock in locks:
-            try:
-                channel = ctx.guild.get_channel(lock['channel_id'])
-                role = ctx.guild.get_role(lock['role_id'])
-                
-                if channel and role:
-                    await remove_channel_lock(channel, role)
-            except:
+            await safe_send(ctx, embed=embed)
+            
+        else:
+            logger.error(f"Необработанная ошибка команды {ctx.command}: {error}")
+            
+            if isinstance(error, discord.Forbidden):
                 pass
-        
-        confirm_embed = discord.Embed(
-            title="✅ Все блокировки удалены",
-            description=f"Удалено {len(locks)} блокировок",
-            color=COLORS['success']
-        )
-        confirm_embed.add_field(
-            name="👤 Удалил",
-            value=ctx.author.mention,
-            inline=True
-        )
-        
-        await interaction.response.edit_message(embed=confirm_embed, view=None)
-    
-    async def cancel_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
-            return
-        
-        cancel_embed = discord.Embed(
-            title="❌ Отменено",
-            description="Удаление блокировок отменено",
-            color=COLORS['warning']
-        )
-        await interaction.response.edit_message(embed=cancel_embed, view=None)
-    
-    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
-    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
-    
-    confirm_button.callback = confirm_callback
-    cancel_button.callback = cancel_callback
-    
-    view.add_item(confirm_button)
-    view.add_item(cancel_button)
-    
-    await safe_send(ctx, embed=embed, view=view)
-
-@bot.command(name='lockinfo')
-@is_admin_or_mod()
-async def lock_info(ctx):
-    locks = await db.get_channel_locks(ctx.guild.id)
-    
-    if not locks:
-        embed = discord.Embed(
-            title="ℹ️ Нет активных блокировок",
-            description="На сервере нет активных блокировок каналов",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="🔒 Активные блокировки",
-        description=f"Всего активных блокировок: **{len(locks)}**",
-        color=COLORS['info']
-    )
-    
-    roles_dict = {}
-    for lock in locks:
-        role_id = lock['role_id']
-        if role_id not in roles_dict:
-            roles_dict[role_id] = []
-        roles_dict[role_id].append(lock)
-    
-    for role_id, role_locks in list(roles_dict.items())[:5]:
-        role = ctx.guild.get_role(role_id)
-        role_name = role.mention if role else f"Роль {role_id}"
-        
-        lock_types = {}
-        for lock in role_locks:
-            lock_type = lock['lock_type']
-            if lock_type not in lock_types:
-                lock_types[lock_type] = []
-            
-            channel = ctx.guild.get_channel(lock['channel_id'])
-            channel_name = channel.mention if channel else f"Канал {lock['channel_id']}"
-            lock_types[lock_type].append(channel_name)
-        
-        role_text = []
-        for lock_type, channels in lock_types.items():
-            lock_type_name = {
-                'send': 'Запрет писать',
-                'view': 'Скрытие канала',
-                'both': 'Полная блокировка'
-            }.get(lock_type, lock_type)
-            
-            role_text.append(f"**{lock_type_name}** ({len(channels)}): {', '.join(channels[:3])}")
-            if len(channels) > 3:
-                role_text[-1] += f" и ещё {len(channels) - 3}"
-        
-        embed.add_field(
-            name=f"🎯 {role_name}",
-            value="\n".join(role_text),
-            inline=False
-        )
-    
-    channel_count = await db.get_channel_count(ctx.guild.id)
-    embed.add_field(
-        name="📋 Список каналов",
-        value=f"Каналов в списке для блокировки: **{channel_count}**",
-        inline=False
-    )
-    
-    if len(roles_dict) > 5:
-        embed.set_footer(text=f"Показано 5 из {len(roles_dict)} ролей. Используйте !listchannels для полного списка")
-    
-    await safe_send(ctx, embed=embed)
+            else:
+                embed = discord.Embed(
+                    title="❌ Неизвестная ошибка",
+                    description="Произошла неизвестная ошибка. Администратор уже уведомлен.",
+                    color=COLORS['error']
+                )
+                await safe_send(ctx, embed=embed)
+                
+    except Exception as e:
+        logger.error(f"Критическая ошибка в обработчике ошибок: {e}")
 
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ ПОИНТАМИ ==========
 
 @bot.command(name='addpoints')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def add_points(ctx, member: discord.Member, amount: int, *, reason: str = "Выдано админом"):
     if amount <= 0:
         embed = discord.Embed(
@@ -3438,6 +2012,14 @@ async def add_points(ctx, member: discord.Member, amount: int, *, reason: str = 
         return
     
     new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "add_points",
+        f"{amount} поинтов пользователю {member.id} (причина: {reason})"
+    )
     
     embed = discord.Embed(
         title="✅ Поинты выданы!",
@@ -3455,7 +2037,8 @@ async def add_points(ctx, member: discord.Member, amount: int, *, reason: str = 
     await check_and_assign_roles(member)
 
 @bot.command(name='removepoints')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def remove_points(ctx, member: discord.Member, amount: int, *, reason: str = "Изъято админом"):
     if amount <= 0:
         embed = discord.Embed(
@@ -3467,6 +2050,14 @@ async def remove_points(ctx, member: discord.Member, amount: int, *, reason: str
         return
     
     new_total = await db.remove_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "remove_points",
+        f"{amount} поинтов у пользователя {member.id} (причина: {reason})"
+    )
     
     embed = discord.Embed(
         title="✅ Поинты изъяты!",
@@ -3484,7 +2075,8 @@ async def remove_points(ctx, member: discord.Member, amount: int, *, reason: str
     await check_and_assign_roles(member)
 
 @bot.command(name='setpoints')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def set_points(ctx, member: discord.Member, amount: int, *, reason: str = "Установлено админом"):
     if amount < 0:
         embed = discord.Embed(
@@ -3496,6 +2088,14 @@ async def set_points(ctx, member: discord.Member, amount: int, *, reason: str = 
         return
     
     new_total = await db.set_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "set_points",
+        f"Установлено {amount} поинтов пользователю {member.id} (причина: {reason})"
+    )
     
     embed = discord.Embed(
         title="✅ Поинты установлены!",
@@ -3512,7 +2112,8 @@ async def set_points(ctx, member: discord.Member, amount: int, *, reason: str = 
     await check_and_assign_roles(member)
 
 @bot.command(name='resetpoints')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def reset_points(ctx):
     embed = discord.Embed(
         title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
@@ -3531,6 +2132,14 @@ async def reset_points(ctx):
             return
         
         await db.reset_guild_points(ctx.guild.id)
+        
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "reset_points",
+            "Сброс всех поинтов на сервере"
+        )
         
         confirm_embed = discord.Embed(
             title="✅ Все поинты сброшены!",
@@ -3562,6 +2171,7 @@ async def reset_points(ctx):
     await safe_send(ctx, embed=embed, view=view)
 
 @bot.command(name='points')
+@command_enabled()
 async def check_points(ctx, member: Optional[discord.Member] = None):
     if member is None:
         member = ctx.author
@@ -3569,7 +2179,26 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     guild_id = ctx.guild.id
     user_id = member.id
     
-    role_settings, _ = get_guild_settings(guild_id)
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        loaded_settings, loaded_colors = await db.load_role_settings(guild_id)
+        if loaded_settings:
+            GUILD_ROLE_SETTINGS[guild_id] = loaded_settings
+            colors = {}
+            for role_name, color_str in loaded_colors.items():
+                try:
+                    if color_str and color_str.startswith('#'):
+                        color_int = int(color_str[1:], 16)
+                        colors[role_name] = discord.Color(color_int)
+                    else:
+                        colors[role_name] = discord.Color.default()
+                except:
+                    colors[role_name] = discord.Color.default()
+            GUILD_ROLE_COLORS[guild_id] = colors
+        else:
+            GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+            GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    
+    role_settings = GUILD_ROLE_SETTINGS.get(guild_id, {})
     
     points = await db.get_user_points(user_id, guild_id)
     position = await db.get_user_position(user_id, guild_id)
@@ -3629,6 +2258,7 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     await safe_send(ctx, embed=embed)
 
 @bot.command(name='leaderboard')
+@command_enabled()
 async def leaderboard(ctx, page: int = 1):
     guild_id = ctx.guild.id
     
@@ -3661,7 +2291,10 @@ async def leaderboard(ctx, page: int = 1):
         
         medal = medals[i-1] if i <= len(medals) else f"{i}."
         
-        role_settings, _ = get_guild_settings(guild_id)
+        if guild_id not in GUILD_ROLE_SETTINGS:
+            role_settings = {}
+        else:
+            role_settings = GUILD_ROLE_SETTINGS.get(guild_id, {})
         
         user_role = "Нет роли"
         for required_points, role_name in sorted(role_settings.items(), reverse=True):
@@ -3679,7 +2312,7 @@ async def leaderboard(ctx, page: int = 1):
         name="📊 Статистика сервера",
         value=f"• Всего пользователей: **{stats['total_users']}**\n"
               f"• Всего поинтов: **{stats['total_points']}**\n"
-              f"• Среднее: **{stats['avg_points']:.1f}**\n"
+              f"• Среднее: **{stats['avg_points']}**\n"
               f"• Максимум: **{stats['max_points']}**",
         inline=False
     )
@@ -3688,63 +2321,9 @@ async def leaderboard(ctx, page: int = 1):
     
     await safe_send(ctx, embed=embed)
 
-@bot.command(name='roles')
-async def show_roles(ctx):
-    guild_id = ctx.guild.id
-    role_settings, role_colors = get_guild_settings(guild_id)
-    
-    embed = discord.Embed(
-        title="🏅 Система ролей",
-        description="Роли выдаются автоматически при достижении определенного количества поинтов",
-        color=COLORS['points']
-    )
-    
-    if role_settings:
-        for required_points, role_name in sorted(role_settings.items()):
-            color = role_colors.get(role_name, discord.Color.default())
-            color_block = f"`{str(color)}`"
-            
-            embed.add_field(
-                name=f"🎖️ {role_name}",
-                value=f"**{required_points}** поинтов\nЦвет: {color_block}",
-                inline=True
-            )
-    else:
-        embed.add_field(
-            name="ℹ️ Информация",
-            value="Система ролей еще не настроена",
-            inline=False
-        )
-    
-    admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
-    embed.set_footer(text="Админские ID ролей: " + admin_role_ids_str)
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='ping')
-async def ping_command(ctx):
-    latency = round(bot.latency * 1000)
-    
-    embed = discord.Embed(
-        title="🏓 Понг!",
-        color=COLORS['success']
-    )
-    embed.add_field(name="Задержка API", value=f"**{latency}мс**", inline=True)
-    embed.add_field(name="Серверов", value=f"**{len(bot.guilds)}**", inline=True)
-    embed.add_field(name="Порт веб-сервера", value=f"**{PORT}**", inline=True)
-    
-    db_status = "✅ **Подключена**" if hasattr(db, 'pool') and db.pool else "❌ **Отключена**"
-    embed.add_field(name="Статус БД", value=db_status, inline=True)
-    
-    clan_status = "✅ **Готов**" if clan_manager is not None else "⏳ **Инициализация**"
-    embed.add_field(name="Система кланов", value=clan_status, inline=True)
-    
-    embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
-    embed.set_footer(text=f"Префикс команд: {PREFIX}")
-    
-    await safe_send(ctx, embed=embed)
-
 @bot.command(name='export')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def export_command(ctx):
     guild_id = ctx.guild.id
     
@@ -3769,455 +2348,20 @@ async def export_command(ctx):
     await safe_send(ctx, "📁 Экспорт данных о поинтах:", file=file)
     os.remove(filename)
 
-@bot.command(name='raid')
-@is_admin()
-async def raid_command(ctx, clan: str, link: str):
-    if not ctx.channel.permissions_for(ctx.guild.me).mention_everyone:
-        embed = discord.Embed(
-            title="❌ Недостаточно прав",
-            description="Мне нужны права на упоминание @everyone для этой команды!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    if not link.startswith(('http://', 'https://', 'discord.gg/')):
-        await safe_send(ctx, "❌ Ссылка должна начинаться с http://, https:// или discord.gg/")
-        return
-    
-    embed = discord.Embed(
-        title="РЕЙД!",
-        description="Всем участникам срочно присоединиться!",
-        color=discord.Color.red()
-    )
-    
-    embed.add_field(
-        name="👥 Клан",
-        value=f"**{clan}**",
-        inline=True
-    )
-    
-    embed.add_field(
-        name="🔗 Ссылка",
-        value=f"[Нажмите чтобы присоединиться]({link})",
-        inline=True
-    )
-    
-    embed.set_footer(
-        text=f"Оповещение отправлено {ctx.author.display_name}",
-        icon_url=ctx.author.display_avatar.url
-    )
-    
-    await safe_send(ctx, content="@everyone", embed=embed)
-    
-    confirm_embed = discord.Embed(
-        title="✅ Рейд-оповещение отправлено!",
-        description=f"Клан: **{clan}**\nСсылка: {link}",
-        color=COLORS['success']
-    )
-    await safe_send(ctx, embed=confirm_embed)
-
-# ========== БЫСТРЫЕ КОМАНДЫ ДЛЯ БЛОКИРОВКИ ==========
-
-last_locked_role = {}
-
-@bot.command(name='lockrole')
-@is_admin_or_mod()
-async def lockrole_command(ctx, role: discord.Role):
-    global last_locked_role
-    last_locked_role[ctx.guild.id] = role.id
-    
-    embed = discord.Embed(
-        title="✅ Роль установлена",
-        description=f"Теперь команды `!lock` и `!unlock` будут работать с ролью {role.mention}",
-        color=COLORS['success']
-    )
-    
-    embed.add_field(name="ID роли", value=f"`{role.id}`", inline=True)
-    embed.add_field(name="Название роли", value=f"`{role.name}`", inline=True)
-    embed.add_field(
-        name="Как использовать", 
-        value=f"• `{PREFIX}lock [тип]` - заблокировать каналы для этой роли\n"
-              f"• `{PREFIX}unlock` - разблокировать каналы для этой роли",
-        inline=False
-    )
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='unlock')
-@is_admin_or_mod()
-async def unlock_command(ctx):
-    global last_locked_role
-    
-    if ctx.guild.id not in last_locked_role:
-        embed = discord.Embed(
-            title="❌ Роль не установлена",
-            description=f"Сначала используйте `{PREFIX}lockrole @роль` чтобы указать, с какой ролью работать!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    role_id = last_locked_role[ctx.guild.id]
-    target_role = ctx.guild.get_role(role_id)
-    
-    if not target_role:
-        del last_locked_role[ctx.guild.id]
-        embed = discord.Embed(
-            title="❌ Роль не найдена",
-            description=f"Роль с ID `{role_id}` больше не существует на сервере.\n"
-                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="🔓 Разблокировка каналов",
-        description=f"Начинаю разблокировку каналов для роли {target_role.mention}...",
-        color=COLORS['info']
-    )
-    
-    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
-    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
-    
-    message = await safe_send(ctx, embed=embed)
-    if not message:
-        return
-    
-    results = await unlock_all_channels_in_list(ctx.guild, target_role)
-    
-    success_count = sum(1 for r in results if "✅" in r)
-    warning_count = sum(1 for r in results if "⚠️" in r)
-    error_count = sum(1 for r in results if "❌" in r)
-    
-    final_embed = discord.Embed(
-        title="✅ Разблокировка завершена",
-        color=COLORS['success'] if error_count == 0 else COLORS['warning']
-    )
-    
-    final_embed.description = f"Каналы разблокированы для роли {target_role.mention}"
-    
-    final_embed.add_field(
-        name="📊 Результаты",
-        value=f"✅ Успешно: {success_count} каналов\n"
-              f"⚠️ С предупреждениями: {warning_count} каналов\n"
-              f"❌ Ошибки: {error_count} каналов",
-        inline=False
-    )
-    
-    if len(results) <= 10:
-        final_embed.add_field(
-            name="📝 Детали",
-            value="\n".join(results[:10]),
-            inline=False
-        )
-    
-    final_embed.add_field(
-        name="🎯 Для роли",
-        value=f"{target_role.mention} (ID: `{target_role.id}`)",
-        inline=True
-    )
-    
-    final_embed.add_field(
-        name="👤 Разблокировал",
-        value=ctx.author.mention,
-        inline=True
-    )
-    
-    await safe_edit(message, embed=final_embed)
-
-@bot.command(name='lock')
-@is_admin_or_mod()
-async def lock_command(ctx, lock_type: str = "send"):
-    global last_locked_role
-    
-    if ctx.guild.id not in last_locked_role:
-        embed = discord.Embed(
-            title="❌ Роль не установлена",
-            description=f"Сначала используйте `{PREFIX}lockrole @роль` чтобы указать, с какой ролью работать!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    role_id = last_locked_role[ctx.guild.id]
-    target_role = ctx.guild.get_role(role_id)
-    
-    if not target_role:
-        del last_locked_role[ctx.guild.id]
-        embed = discord.Embed(
-            title="❌ Роль не найдена",
-            description=f"Роль с ID `{role_id}` больше не существует на сервере.\n"
-                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    lock_types = ['send', 'view', 'both']
-    
-    if lock_type.lower() not in lock_types:
-        embed = discord.Embed(
-            title="❌ Неверный тип блокировки",
-            description=f"Доступные типы: {', '.join(lock_types)}",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="🔒 Блокировка каналов",
-        description=f"Начинаю блокировку каналов для роли {target_role.mention}...",
-        color=COLORS['warning']
-    )
-    
-    lock_info = {
-        'send': "📝 Запрещено писать, ставить реакции и прикреплять файлы",
-        'view': "👁️ Запрещено читать и писать (канал скрыт)",
-        'both': "🚫 Полная блокировка"
-    }
-    
-    embed.add_field(name="Тип блокировки", value=lock_info[lock_type.lower()], inline=False)
-    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
-    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
-    
-    message = await safe_send(ctx, embed=embed)
-    if not message:
-        return
-    
-    results = await lock_all_channels_in_list(ctx.guild, target_role, lock_type.lower())
-    
-    success_count = sum(1 for r in results if "✅" in r)
-    warning_count = sum(1 for r in results if "⚠️" in r)
-    error_count = sum(1 for r in results if "❌" in r)
-    
-    final_embed = discord.Embed(
-        title="✅ Блокировка завершена",
-        color=COLORS['success'] if error_count == 0 else COLORS['warning']
-    )
-    
-    final_embed.add_field(
-        name="📊 Результаты",
-        value=f"✅ Успешно: {success_count} каналов\n"
-              f"⚠️ С предупреждениями: {warning_count} каналов\n"
-              f"❌ Ошибки: {error_count} каналов",
-        inline=False
-    )
-    
-    if len(results) <= 10:
-        final_embed.add_field(
-            name="📝 Детали",
-            value="\n".join(results[:10]),
-            inline=False
-        )
-    else:
-        final_embed.add_field(
-            name="ℹ️ Информация",
-            value=f"Обработано {len(results)} каналов",
-            inline=False
-        )
-    
-    final_embed.add_field(
-        name="🎯 Для роли",
-        value=f"{target_role.mention} (ID: `{target_role.id}`)",
-        inline=True
-    )
-    
-    final_embed.add_field(
-        name="👤 Заблокировал",
-        value=ctx.author.mention,
-        inline=True
-    )
-    
-    final_embed.set_footer(text=f"Тип блокировки: {lock_type.upper()}")
-    
-    await safe_edit(message, embed=final_embed)
-
-@bot.command(name='currentrole')
-@is_admin()
-async def current_role_command(ctx):
-    global last_locked_role
-    
-    if ctx.guild.id not in last_locked_role:
-        embed = discord.Embed(
-            title="ℹ️ Роль не установлена",
-            description=f"Сейчас не выбрана ни одна роль.\n"
-                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить роль для команд `!lock` и `!unlock`.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    role_id = last_locked_role[ctx.guild.id]
-    target_role = ctx.guild.get_role(role_id)
-    
-    if not target_role:
-        embed = discord.Embed(
-            title="⚠️ Роль не найдена",
-            description=f"Сохранена роль с ID `{role_id}`, но она больше не существует на сервере.\n"
-                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
-            color=COLORS['warning']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="🎯 Текущая роль",
-        description=f"Команды `!lock` и `!unlock` сейчас работают с ролью {target_role.mention}",
-        color=COLORS['success']
-    )
-    
-    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
-    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
-    embed.add_field(
-        name="Доступные команды",
-        value=f"• `{PREFIX}lock [тип]` - заблокировать каналы\n"
-              f"• `{PREFIX}unlock` - разблокировать каналы\n"
-              f"• `{PREFIX}lockrole @другая_роль` - сменить роль",
-        inline=False
-    )
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='resetrole')
-@is_admin()
-async def reset_role_command(ctx):
-    global last_locked_role
-    
-    if ctx.guild.id not in last_locked_role:
-        embed = discord.Embed(
-            title="ℹ️ Роль не установлена",
-            description="Нет установленной роли для сброса.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    del last_locked_role[ctx.guild.id]
-    
-    embed = discord.Embed(
-        title="✅ Роль сброшена",
-        description=f"Теперь команды `!lock` и `!unlock` не будут работать, пока вы не установите новую роль с помощью `{PREFIX}lockrole @роль`.",
-        color=COLORS['success']
-    )
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='addpoints_multi')
-@is_admin()
-async def add_points_multi(ctx, amount: int, *members: discord.Member, reason: str = "Выдано админом"):
-    if amount <= 0:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Количество поинтов должно быть положительным!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    if len(members) == 0:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Не указаны пользователи!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    if len(members) > 25:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description="Можно выдать поинты максимум 25 пользователям за раз!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="⏳ Массовая выдача поинтов",
-        description=f"Выдаю поинты {len(members)} пользователям...",
-        color=COLORS['warning']
-    )
-    embed.add_field(name="Количество поинтов", value=f"**{amount}** каждому", inline=True)
-    embed.add_field(name="Причина", value=reason, inline=True)
-    
-    message = await safe_send(ctx, embed=embed)
-    if not message:
-        return
-    
-    results = []
-    success_count = 0
-    
-    for member in members:
-        try:
-            new_total = await db.add_points(member.id, ctx.guild.id, amount, ctx.author.id, reason)
-            results.append(f"✅ {member.mention}: +{amount} поинтов (всего: {new_total})")
-            success_count += 1
-            await check_and_assign_roles(member)
-        except Exception as e:
-            results.append(f"❌ {member.mention}: Ошибка - {str(e)[:50]}")
-    
-    final_embed = discord.Embed(
-        title="✅ Массовая выдача завершена",
-        color=COLORS['success'] if success_count == len(members) else COLORS['warning']
-    )
-    
-    final_embed.add_field(
-        name="📊 Результаты",
-        value=f"✅ Успешно: {success_count}/{len(members)} пользователей\n"
-              f"❌ Ошибки: {len(members) - success_count}",
-        inline=False
-    )
-    
-    final_embed.add_field(
-        name="📝 Детали операции",
-        value=f"• Поинтов каждому: **{amount}**\n"
-              f"• Причина: **{reason}**\n"
-              f"• Выдал: {ctx.author.mention}",
-        inline=False
-    )
-    
-    if len(results) <= 15:
-        final_embed.add_field(
-            name="👥 Результаты по пользователям",
-            value="\n".join(results[:15]),
-            inline=False
-        )
-    else:
-        final_embed.add_field(
-            name="ℹ️ Информация",
-            value=f"Обработано {len(members)} пользователей",
-            inline=False
-        )
-        
-        if len(results) <= 100:
-            file_content = "Результаты массовой выдачи поинтов:\n\n"
-            file_content += f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            file_content += f"Количество поинтов: {amount}\n"
-            file_content += f"Причина: {reason}\n"
-            file_content += f"Выдал: {ctx.author.display_name} ({ctx.author.id})\n"
-            file_content += f"Сервер: {ctx.guild.name} ({ctx.guild.id})\n\n"
-            file_content += "Детали:\n" + "\n".join(results)
-            
-            filename = f"mass_addpoints_{ctx.guild.id}_{int(datetime.now().timestamp())}.txt"
-            with open(filename, 'w', encoding='utf-8') as f:
-                f.write(file_content)
-            
-            file = discord.File(filename)
-            await safe_send(ctx, f"📋 Полные результаты для {len(members)} пользователей:", file=file)
-            os.remove(filename)
-    
-    await safe_edit(message, embed=final_embed)
-
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ РОЛЯМИ ЗА ПОИНТЫ ==========
 
 @bot.command(name='addrole')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def add_role_for_points(ctx, points: int, *, role_name: str):
     guild_id = ctx.guild.id
     
-    role_settings, role_colors = get_guild_settings(guild_id)
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    
+    role_settings = GUILD_ROLE_SETTINGS[guild_id]
+    role_colors = GUILD_ROLE_COLORS[guild_id]
     
     if points <= 0:
         embed = discord.Embed(
@@ -4253,6 +2397,14 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
     GUILD_ROLE_SETTINGS[guild_id] = role_settings
     GUILD_ROLE_COLORS[guild_id] = role_colors
     
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "add_role",
+        f"Добавлена роль {role_name} за {points} поинтов"
+    )
+    
     try:
         await db.save_role_settings(guild_id, role_settings, role_colors)
         logger.info(f"✅ Настройки ролей сохранены в БД для сервера {guild_id}")
@@ -4273,7 +2425,6 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
     
     embed.add_field(name="🎭 Название роли", value=f"**{role_name}**", inline=True)
     embed.add_field(name="💰 Требуемые поинты", value=f"**{points}**", inline=True)
-    embed.add_field(name="🎨 Цвет", value=f"`{role_colors[role_name]}`", inline=True)
     
     roles_text = []
     for p, name in sorted(role_settings.items()):
@@ -4289,27 +2440,18 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
     
     await update_all_member_roles(ctx.guild)
 
-async def update_all_member_roles(guild):
-    try:
-        logger.info(f"Начинаю массовое обновление ролей на сервере {guild.name}")
-        
-        for member in guild.members:
-            try:
-                await check_and_assign_roles(member)
-                await asyncio.sleep(0.5)
-            except Exception as e:
-                logger.error(f"Ошибка обновления ролей для {member.display_name}: {e}")
-        
-        logger.info(f"Массовое обновление ролей завершено на сервере {guild.name}")
-    except Exception as e:
-        logger.error(f"Ошибка массового обновления ролей: {e}")
-
 @bot.command(name='removerole')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def remove_role_for_points(ctx, points: int):
     guild_id = ctx.guild.id
     
-    role_settings, role_colors = get_guild_settings(guild_id)
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    
+    role_settings = GUILD_ROLE_SETTINGS[guild_id]
+    role_colors = GUILD_ROLE_COLORS[guild_id]
     
     if points not in role_settings:
         embed = discord.Embed(
@@ -4341,6 +2483,14 @@ async def remove_role_for_points(ctx, points: int):
         
         GUILD_ROLE_SETTINGS[guild_id] = role_settings
         GUILD_ROLE_COLORS[guild_id] = role_colors
+        
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "remove_role",
+            f"Удалена роль {role_name} за {points} поинтов"
+        )
         
         try:
             await db.save_role_settings(guild_id, role_settings, role_colors)
@@ -4402,35 +2552,18 @@ async def remove_role_for_points(ctx, points: int):
     
     await safe_send(ctx, embed=embed, view=view)
 
-@bot.command(name='removerolebyname')
-@is_admin()
-async def remove_role_by_name(ctx, *, role_name: str):
-    guild_id = ctx.guild.id
-    role_settings, _ = get_guild_settings(guild_id)
-    
-    points_to_remove = None
-    for points, name in role_settings.items():
-        if name.lower() == role_name.lower():
-            points_to_remove = points
-            break
-    
-    if points_to_remove is None:
-        embed = discord.Embed(
-            title="❌ Ошибка",
-            description=f"Роль **{role_name}** не найдена в системе!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    ctx.command = bot.get_command('removerole')
-    await ctx.invoke(bot.get_command('removerole'), points=points_to_remove)
-
 @bot.command(name='editrole')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def edit_role_for_points(ctx, old_points: int, new_points: int = None, *, new_name: str = None):
     guild_id = ctx.guild.id
-    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    
+    role_settings = GUILD_ROLE_SETTINGS[guild_id]
+    role_colors = GUILD_ROLE_COLORS[guild_id]
     
     if old_points not in role_settings:
         embed = discord.Embed(
@@ -4528,6 +2661,14 @@ async def edit_role_for_points(ctx, old_points: int, new_points: int = None, *, 
     GUILD_ROLE_SETTINGS[guild_id] = role_settings
     GUILD_ROLE_COLORS[guild_id] = role_colors
     
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "edit_role",
+        f"Изменена роль {old_name} -> {new_name or old_name} (поинты: {old_points} -> {new_points or old_points})"
+    )
+    
     try:
         await db.save_role_settings(guild_id, role_settings, role_colors)
         logger.info(f"✅ Настройки ролей обновлены в БД для сервера {guild_id}")
@@ -4549,10 +2690,17 @@ async def edit_role_for_points(ctx, old_points: int, new_points: int = None, *, 
     await update_all_member_roles(ctx.guild)
 
 @bot.command(name='setrolecolor')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def set_role_color(ctx, points: int, color: str):
     guild_id = ctx.guild.id
-    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    
+    role_settings = GUILD_ROLE_SETTINGS[guild_id]
+    role_colors = GUILD_ROLE_COLORS[guild_id]
     
     if points not in role_settings:
         embed = discord.Embed(
@@ -4598,6 +2746,14 @@ async def set_role_color(ctx, points: int, color: str):
     role_colors[role_name] = new_color
     GUILD_ROLE_COLORS[guild_id] = role_colors
     
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "set_role_color",
+        f"Установлен цвет для роли {role_name}"
+    )
+    
     try:
         await db.save_role_settings(guild_id, role_settings, role_colors)
         logger.info(f"✅ Настройки ролей обновлены в БД для сервера {guild_id}")
@@ -4619,16 +2775,20 @@ async def set_role_color(ctx, points: int, color: str):
     
     embed.add_field(name="🎭 Роль", value=f"**{role_name}**", inline=True)
     embed.add_field(name="💰 Поинты", value=f"{points}", inline=True)
-    embed.add_field(name="🎨 Цвет", value=f"`{new_color}`", inline=True)
-    embed.add_field(name="👁️ Пример", value="████████", inline=False)
     
     await safe_send(ctx, embed=embed)
 
 @bot.command(name='reorderroles')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def reorder_roles(ctx):
     guild_id = ctx.guild.id
-    role_settings, role_colors = get_guild_settings(guild_id)
+    
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    
+    role_settings = GUILD_ROLE_SETTINGS[guild_id]
     
     if not role_settings:
         embed = discord.Embed(
@@ -4663,6 +2823,14 @@ async def reorder_roles(ctx):
         
         await interaction.response.defer()
         
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "reorder_roles",
+            "Реконструкция всех ролей"
+        )
+        
         status_embed = discord.Embed(
             title="⏳ Реконструкция ролей...",
             description="Начинаю пересоздание ролей...",
@@ -4670,6 +2838,7 @@ async def reorder_roles(ctx):
         )
         status_msg = await interaction.followup.send(embed=status_embed)
         
+        # Сохраняем текущие роли участников
         member_roles = {}
         for member in ctx.guild.members:
             for role_name in role_settings.values():
@@ -4679,6 +2848,7 @@ async def reorder_roles(ctx):
                         member_roles[member.id] = []
                     member_roles[member.id].append(role_name)
         
+        # Удаляем старые роли
         deleted_count = 0
         for role_name in role_settings.values():
             role = discord.utils.get(ctx.guild.roles, name=role_name)
@@ -4689,6 +2859,7 @@ async def reorder_roles(ctx):
                 except:
                     pass
         
+        # Создаем новые роли
         created_roles = {}
         for points, role_name in sorted(role_settings.items()):
             color = role_colors.get(role_name, discord.Color.default())
@@ -4713,6 +2884,7 @@ async def reorder_roles(ctx):
             except Exception as e:
                 logger.error(f"Ошибка создания роли {role_name}: {e}")
         
+        # Восстанавливаем роли участникам
         assigned_count = 0
         for member in ctx.guild.members:
             if member.id in member_roles:
@@ -4728,6 +2900,7 @@ async def reorder_roles(ctx):
                     except:
                         pass
         
+        # Сортируем роли
         try:
             all_roles = ctx.guild.roles
             role_order = []
@@ -4782,44 +2955,9 @@ async def reorder_roles(ctx):
     
     await safe_send(ctx, embed=embed, view=view)
 
-@bot.command(name='saveroles')
-@is_admin()
-async def save_roles_config(ctx):
-    guild_id = ctx.guild.id
-    role_settings, role_colors = get_guild_settings(guild_id)
-    
-    filename = f"roles_config_{ctx.guild.id}_{int(datetime.now().timestamp())}.txt"
-    
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write("=== КОНФИГУРАЦИЯ РОЛЕЙ ЗА ПОИНТЫ ===\n\n")
-        f.write(f"Сервер: {ctx.guild.name} (ID: {ctx.guild.id})\n")
-        f.write(f"Дата: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"Экспортировал: {ctx.author.display_name} (ID: {ctx.author.id})\n\n")
-        
-        f.write("=== РОЛИ ===\n")
-        for points, role_name in sorted(role_settings.items()):
-            color = role_colors.get(role_name, discord.Color.default())
-            f.write(f"{points}: {role_name} (цвет: {color})\n")
-        
-        f.write("\n=== КОМАНДЫ ДЛЯ ВОССТАНОВЛЕНИЯ ===\n")
-        for points, role_name in sorted(role_settings.items()):
-            color = role_colors.get(role_name, discord.Color.default())
-            f.write(f"!addrole {points} {role_name}\n")
-            if color != discord.Color.default():
-                f.write(f"!setrolecolor {points} {str(color)}\n")
-    
-    file = discord.File(filename)
-    embed = discord.Embed(
-        title="✅ Конфигурация ролей сохранена",
-        description="Текущая конфигурация ролей экспортирована в файл.",
-        color=COLORS['success']
-    )
-    
-    await safe_send(ctx, embed=embed, file=file)
-    os.remove(filename)
-
 @bot.command(name='updateroles')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def update_all_roles(ctx):
     embed = discord.Embed(
         title="⏳ Обновление ролей",
@@ -4828,6 +2966,14 @@ async def update_all_roles(ctx):
     )
     
     message = await safe_send(ctx, embed=embed)
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "update_roles",
+        "Массовое обновление ролей"
+    )
     
     await update_all_member_roles(ctx.guild)
     
@@ -4842,241 +2988,76 @@ async def update_all_roles(ctx):
     else:
         await safe_send(ctx, embed=final_embed)
 
-# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ АДМИНСКИМИ РОЛЯМИ ==========
-
-@bot.command(name='addadminrole')
-@is_admin()
-async def add_admin_role(ctx, role: discord.Role):
-    global ADMIN_ROLE_IDS
-    
-    if role.id in ADMIN_ROLE_IDS:
-        embed = discord.Embed(
-            title="⚠️ Роль уже в списке",
-            description=f"Роль {role.mention} уже есть в списке админских ролей!",
-            color=COLORS['warning']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    ADMIN_ROLE_IDS.append(role.id)
-    
+async def update_all_member_roles(guild):
     try:
-        env_path = '.env'
-        if os.path.exists(env_path):
-            with open(env_path, 'r') as f:
-                lines = f.readlines()
-            
-            admin_roles_str = ','.join(str(id) for id in ADMIN_ROLE_IDS)
-            found = False
-            for i, line in enumerate(lines):
-                if line.startswith('ADMIN_ROLE_IDS='):
-                    lines[i] = f'ADMIN_ROLE_IDS={admin_roles_str}\n'
-                    found = True
-                    break
-            
-            if not found:
-                lines.append(f'ADMIN_ROLE_IDS={admin_roles_str}\n')
-            
-            with open(env_path, 'w') as f:
-                f.writelines(lines)
-            
-            load_dotenv(override=True)
+        logger.info(f"Начинаю массовое обновление ролей на сервере {guild.name}")
+        
+        for member in guild.members:
+            try:
+                await check_and_assign_roles(member)
+                await asyncio.sleep(0.5)
+            except Exception as e:
+                logger.error(f"Ошибка обновления ролей для {member.display_name}: {e}")
+        
+        logger.info(f"Массовое обновление ролей завершено на сервере {guild.name}")
     except Exception as e:
-        logger.warning(f"Не удалось обновить .env файл: {e}")
-    
-    embed = discord.Embed(
-        title="✅ Роль добавлена",
-        description=f"Роль {role.mention} добавлена в список админских ролей!",
-        color=COLORS['success']
-    )
-    
-    embed.add_field(
-        name="📊 Текущие админские роли",
-        value="\n".join([f"• <@&{role_id}>" for role_id in ADMIN_ROLE_IDS]) or "Нет ролей",
-        inline=False
-    )
-    
-    embed.set_footer(text=f"Всего ролей: {len(ADMIN_ROLE_IDS)}")
-    
-    await safe_send(ctx, embed=embed)
+        logger.error(f"Ошибка массового обновления ролей: {e}")
 
-@bot.command(name='removeadminrole')
-@is_admin()
-async def remove_admin_role(ctx, role: discord.Role):
-    global ADMIN_ROLE_IDS
+@bot.command(name='roles')
+@command_enabled()
+async def show_roles(ctx):
+    guild_id = ctx.guild.id
     
-    if role.id not in ADMIN_ROLE_IDS:
-        embed = discord.Embed(
-            title="❌ Роль не найдена",
-            description=f"Роль {role.mention} не найдена в списке админских ролей!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    ADMIN_ROLE_IDS.remove(role.id)
-    
-    try:
-        env_path = '.env'
-        if os.path.exists(env_path):
-            with open(env_path, 'r') as f:
-                lines = f.readlines()
-            
-            admin_roles_str = ','.join(str(id) for id in ADMIN_ROLE_IDS)
-            for i, line in enumerate(lines):
-                if line.startswith('ADMIN_ROLE_IDS='):
-                    lines[i] = f'ADMIN_ROLE_IDS={admin_roles_str}\n'
-                    break
-            
-            with open(env_path, 'w') as f:
-                f.writelines(lines)
-            
-            load_dotenv(override=True)
-    except Exception as e:
-        logger.warning(f"Не удалось обновить .env файл: {e}")
-    
-    embed = discord.Embed(
-        title="✅ Роль удалена",
-        description=f"Роль {role.mention} удалена из списка админских ролей!",
-        color=COLORS['success']
-    )
-    
-    embed.add_field(
-        name="📊 Текущие админские роли",
-        value="\n".join([f"• <@&{role_id}>" for role_id in ADMIN_ROLE_IDS]) or "Нет ролей",
-        inline=False
-    )
-    
-    embed.set_footer(text=f"Всего ролей: {len(ADMIN_ROLE_IDS)}")
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='listadminroles')
-async def list_admin_roles(ctx):
-    if not ADMIN_ROLE_IDS:
-        embed = discord.Embed(
-            title="📋 Список админских ролей",
-            description="В данный момент нет назначенных админских ролей.\n"
-                       f"Используйте `{PREFIX}addadminrole @роль` чтобы добавить роль.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="📋 Список админских ролей",
-        description=f"Всего ролей: **{len(ADMIN_ROLE_IDS)}**",
-        color=COLORS['info']
-    )
-    
-    roles_info = []
-    for role_id in ADMIN_ROLE_IDS:
-        role = ctx.guild.get_role(role_id)
-        if role:
-            roles_info.append(f"• {role.mention} (ID: `{role_id}`)")
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        loaded_settings, loaded_colors = await db.load_role_settings(guild_id)
+        if loaded_settings:
+            GUILD_ROLE_SETTINGS[guild_id] = loaded_settings
+            colors = {}
+            for role_name, color_str in loaded_colors.items():
+                try:
+                    if color_str and color_str.startswith('#'):
+                        color_int = int(color_str[1:], 16)
+                        colors[role_name] = discord.Color(color_int)
+                    else:
+                        colors[role_name] = discord.Color.default()
+                except:
+                    colors[role_name] = discord.Color.default()
+            GUILD_ROLE_COLORS[guild_id] = colors
         else:
-            roles_info.append(f"• Роль с ID `{role_id}` (не найдена на сервере)")
+            GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+            GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
     
-    embed.add_field(
-        name="🎭 Роли",
-        value="\n".join(roles_info) if roles_info else "Нет доступных ролей",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="ℹ️ Информация",
-        value="Владельцы этих ролей имеют доступ ко всем админским командам бота.\n"
-              f"Используйте `{PREFIX}addadminrole @роль` чтобы добавить новую роль.\n"
-              f"Используйте `{PREFIX}removeadminrole @роль` чтобы удалить роль.",
-        inline=False
-    )
-    
-    await safe_send(ctx, embed=embed)
-
-@bot.command(name='clearadminroles')
-@is_admin()
-async def clear_admin_roles(ctx):
-    global ADMIN_ROLE_IDS
-    
-    if not ADMIN_ROLE_IDS:
-        embed = discord.Embed(
-            title="ℹ️ Нет ролей",
-            description="Список админских ролей уже пуст!",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
+    role_settings = GUILD_ROLE_SETTINGS.get(guild_id, {})
+    role_colors = GUILD_ROLE_COLORS.get(guild_id, {})
     
     embed = discord.Embed(
-        title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
-        description=f"Вы уверены, что хотите удалить ВСЕ админские роли (**{len(ADMIN_ROLE_IDS)}** шт.)?\n"
-                   "После этого только пользователи с правами администратора Discord смогут использовать админские команды!",
-        color=COLORS['error']
+        title="🏅 Система ролей",
+        description="Роли выдаются автоматически при достижении определенного количества поинтов",
+        color=COLORS['points']
     )
     
-    view = discord.ui.View(timeout=30)
-    
-    async def confirm_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
-            return
-        
-        old_count = len(ADMIN_ROLE_IDS)
-        ADMIN_ROLE_IDS = []
-        
-        try:
-            env_path = '.env'
-            if os.path.exists(env_path):
-                with open(env_path, 'r') as f:
-                    lines = f.readlines()
-                
-                for i, line in enumerate(lines):
-                    if line.startswith('ADMIN_ROLE_IDS='):
-                        lines[i] = 'ADMIN_ROLE_IDS=\n'
-                        break
-                
-                with open(env_path, 'w') as f:
-                    f.writelines(lines)
-                
-                load_dotenv(override=True)
-        except Exception as e:
-            logger.warning(f"Не удалось обновить .env файл: {e}")
-        
-        confirm_embed = discord.Embed(
-            title="✅ Все админские роли удалены",
-            description=f"Удалено {old_count} админских ролей.\n"
-                       "Только пользователи с правами администратора Discord могут использовать админские команды.",
-            color=COLORS['success']
+    if role_settings:
+        for required_points, role_name in sorted(role_settings.items()):
+            color = role_colors.get(role_name, discord.Color.default())
+            color_block = f"`{str(color)}`"
+            
+            embed.add_field(
+                name=f"🎖️ {role_name}",
+                value=f"**{required_points}** поинтов\nЦвет: {color_block}",
+                inline=True
+            )
+    else:
+        embed.add_field(
+            name="ℹ️ Информация",
+            value="Система ролей еще не настроена",
+            inline=False
         )
-        await interaction.response.edit_message(embed=confirm_embed, view=None)
     
-    async def cancel_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
-            return
-        
-        cancel_embed = discord.Embed(
-            title="❌ Удаление отменено",
-            description="Список админских ролей не был изменен.",
-            color=COLORS['warning']
-        )
-        await interaction.response.edit_message(embed=cancel_embed, view=None)
-    
-    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
-    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
-    
-    confirm_button.callback = confirm_callback
-    cancel_button.callback = cancel_callback
-    
-    view.add_item(confirm_button)
-    view.add_item(cancel_button)
-    
-    await safe_send(ctx, embed=embed, view=view)
-
-# ========== КОМАНДА RELOADROLES ==========
+    await safe_send(ctx, embed=embed)
 
 @bot.command(name='reloadroles')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def reload_roles_from_db(ctx):
     global GUILD_ROLE_SETTINGS, GUILD_ROLE_COLORS
     guild_id = ctx.guild.id
@@ -5123,6 +3104,14 @@ async def reload_roles_from_db(ctx):
                 color=COLORS['info']
             )
         
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "reload_roles",
+            "Перезагрузка ролей из БД"
+        )
+        
         await safe_send(ctx, embed=embed)
         
     except Exception as e:
@@ -5132,6 +3121,1279 @@ async def reload_roles_from_db(ctx):
             color=COLORS['error']
         )
         await safe_send(ctx, embed=embed)
+
+# ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ КАНАЛАМИ ==========
+
+@bot.command(name='addchannel')
+@is_mod()
+@command_enabled()
+async def add_channel(ctx, channel: discord.TextChannel):
+    success = await db.add_channel_to_list(
+        ctx.guild.id, channel.id, channel.name, ctx.author.id
+    )
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "add_channel",
+        f"Добавлен канал {channel.name} ({channel.id})"
+    )
+    
+    if success:
+        embed = discord.Embed(
+            title="✅ Канал добавлен",
+            description=f"Канал {channel.mention} добавлен в список для блокировки",
+            color=COLORS['success']
+        )
+        embed.add_field(name="Название", value=f"`{channel.name}`", inline=True)
+        embed.add_field(name="ID", value=f"`{channel.id}`", inline=True)
+        embed.add_field(name="Добавил", value=ctx.author.mention, inline=True)
+        
+        count = await db.get_channel_count(ctx.guild.id)
+        embed.set_footer(text=f"Всего каналов в списке: {count}")
+    else:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description="Не удалось добавить канал в список",
+            color=COLORS['error']
+        )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='removechannel')
+@is_mod()
+@command_enabled()
+async def remove_channel(ctx, channel: Optional[discord.TextChannel] = None):
+    if channel:
+        success = await db.remove_channel_from_list(ctx.guild.id, channel.id)
+        
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "remove_channel",
+            f"Удален канал {channel.name} ({channel.id})"
+        )
+        
+        if success:
+            embed = discord.Embed(
+                title="✅ Канал удален",
+                description=f"Канал {channel.mention} удален из списка",
+                color=COLORS['success']
+            )
+        else:
+            embed = discord.Embed(
+                title="❌ Ошибка",
+                description=f"Не удалось удалить канал {channel.mention}",
+                color=COLORS['error']
+            )
+        await safe_send(ctx, embed=embed)
+    else:
+        embed = discord.Embed(
+            title="⚠️ Удаление всех каналов",
+            description="Вы уверены, что хотите удалить ВСЕ каналы из списка?",
+            color=COLORS['warning']
+        )
+        
+        view = discord.ui.View(timeout=30)
+        
+        async def confirm_callback(interaction):
+            if interaction.user != ctx.author:
+                await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+                return
+            
+            success = await db.remove_channel_from_list(ctx.guild.id)
+            
+            # Логируем действие
+            await db.add_action_log(
+                ctx.guild.id,
+                ctx.author.id,
+                "remove_all_channels",
+                "Удалены все каналы из списка"
+            )
+            
+            if success:
+                confirm_embed = discord.Embed(
+                    title="✅ Все каналы удалены",
+                    description="Все каналы удалены из списка",
+                    color=COLORS['success']
+                )
+            else:
+                confirm_embed = discord.Embed(
+                    title="❌ Ошибка",
+                    description="Не удалось удалить каналы",
+                    color=COLORS['error']
+                )
+            
+            await interaction.response.edit_message(embed=confirm_embed, view=None)
+        
+        async def cancel_callback(interaction):
+            if interaction.user != ctx.author:
+                await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+                return
+            
+            cancel_embed = discord.Embed(
+                title="❌ Отменено",
+                description="Удаление каналов отменено",
+                color=COLORS['warning']
+            )
+            await interaction.response.edit_message(embed=cancel_embed, view=None)
+        
+        confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+        cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+        
+        confirm_button.callback = confirm_callback
+        cancel_button.callback = cancel_callback
+        
+        view.add_item(confirm_button)
+        view.add_item(cancel_button)
+        
+        await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='listchannels')
+@is_mod()
+@command_enabled()
+async def list_channels(ctx):
+    channels = await db.get_channel_list(ctx.guild.id)
+    
+    if not channels:
+        embed = discord.Embed(
+            title="📋 Список каналов пуст",
+            description="Добавьте каналы с помощью `!addchannel #канал`",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Список каналов для блокировки",
+        color=COLORS['info']
+    )
+    
+    for i, channel_data in enumerate(channels, 1):
+        channel = ctx.guild.get_channel(channel_data['channel_id'])
+        channel_mention = channel.mention if channel else f"`{channel_data['channel_name']}`"
+        
+        try:
+            added_by = await ctx.guild.fetch_member(channel_data['added_by'])
+            added_by_name = added_by.display_name if added_by else f"ID: {channel_data['added_by']}"
+        except:
+            added_by_name = f"ID: {channel_data['added_by']}"
+        
+        embed.add_field(
+            name=f"{i}. {channel_data['channel_name']}",
+            value=f"Канал: {channel_mention}\n"
+                  f"ID: `{channel_data['channel_id']}`\n"
+                  f"Добавил: {added_by_name}\n"
+                  f"Дата: {channel_data['added_at'].strftime('%d.%m.%Y %H:%M')}",
+            inline=False
+        )
+    
+    count = len(channels)
+    embed.set_footer(text=f"Всего каналов: {count}")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='lockinfo')
+@is_mod()
+@command_enabled()
+async def lock_info(ctx):
+    locks = await db.get_channel_locks(ctx.guild.id)
+    
+    if not locks:
+        embed = discord.Embed(
+            title="ℹ️ Нет активных блокировок",
+            description="На сервере нет активных блокировок каналов",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="🔒 Активные блокировки",
+        description=f"Всего активных блокировок: **{len(locks)}**",
+        color=COLORS['info']
+    )
+    
+    roles_dict = {}
+    for lock in locks:
+        role_id = lock['role_id']
+        if role_id not in roles_dict:
+            roles_dict[role_id] = []
+        roles_dict[role_id].append(lock)
+    
+    for role_id, role_locks in list(roles_dict.items())[:5]:
+        role = ctx.guild.get_role(role_id)
+        role_name = role.mention if role else f"Роль {role_id}"
+        
+        lock_types = {}
+        for lock in role_locks:
+            lock_type = lock['lock_type']
+            if lock_type not in lock_types:
+                lock_types[lock_type] = []
+            
+            channel = ctx.guild.get_channel(lock['channel_id'])
+            channel_name = channel.mention if channel else f"Канал {lock['channel_id']}"
+            lock_types[lock_type].append(channel_name)
+        
+        role_text = []
+        for lock_type, channels in lock_types.items():
+            lock_type_name = {
+                'send': 'Запрет писать',
+                'view': 'Скрытие канала',
+                'both': 'Полная блокировка'
+            }.get(lock_type, lock_type)
+            
+            role_text.append(f"**{lock_type_name}** ({len(channels)}): {', '.join(channels[:3])}")
+            if len(channels) > 3:
+                role_text[-1] += f" и ещё {len(channels) - 3}"
+        
+        embed.add_field(
+            name=f"🎯 {role_name}",
+            value="\n".join(role_text),
+            inline=False
+        )
+    
+    channel_count = await db.get_channel_count(ctx.guild.id)
+    embed.add_field(
+        name="📋 Список каналов",
+        value=f"Каналов в списке для блокировки: **{channel_count}**",
+        inline=False
+    )
+    
+    if len(roles_dict) > 5:
+        embed.set_footer(text=f"Показано 5 из {len(roles_dict)} ролей. Используйте !listchannels для полного списка")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='clearlocks')
+@is_mod()
+@command_enabled()
+async def clear_locks(ctx):
+    locks = await db.get_channel_locks(ctx.guild.id)
+    
+    if not locks:
+        embed = discord.Embed(
+            title="ℹ️ Нет активных блокировок",
+            description="На сервере нет активных блокировок каналов",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="🗑️ Удаление всех блокировок",
+        description=f"Вы уверены, что хотите удалить ВСЕ блокировки каналов ({len(locks)} шт.)?\nЭто действие необратимо!",
+        color=COLORS['error']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        await db.clear_all_locks(ctx.guild.id)
+        
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "clear_locks",
+            f"Удалены все блокировки ({len(locks)} шт.)"
+        )
+        
+        for lock in locks:
+            try:
+                channel = ctx.guild.get_channel(lock['channel_id'])
+                role = ctx.guild.get_role(lock['role_id'])
+                
+                if channel and role:
+                    await remove_channel_lock(channel, role)
+            except:
+                pass
+        
+        confirm_embed = discord.Embed(
+            title="✅ Все блокировки удалены",
+            description=f"Удалено {len(locks)} блокировок",
+            color=COLORS['success']
+        )
+        confirm_embed.add_field(
+            name="👤 Удалил",
+            value=ctx.author.mention,
+            inline=True
+        )
+        
+        await interaction.response.edit_message(embed=confirm_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Отменено",
+            description="Удаление блокировок отменено",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+# ========== БЫСТРЫЕ КОМАНДЫ ДЛЯ БЛОКИРОВКИ ==========
+
+@bot.command(name='lockrole')
+@is_mod()
+@command_enabled()
+async def lockrole_command(ctx, role: discord.Role):
+    global last_locked_role
+    last_locked_role[ctx.guild.id] = role.id
+    
+    # Сохраняем в настройки сервера
+    settings = await db.get_guild_settings(ctx.guild.id)
+    settings['default_lock_role_id'] = role.id
+    await db.update_guild_settings(ctx.guild.id, settings, ctx.author.id)
+    
+    embed = discord.Embed(
+        title="✅ Роль установлена",
+        description=f"Теперь команды `!lock` и `!unlock` будут работать с ролью {role.mention}",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(name="ID роли", value=f"`{role.id}`", inline=True)
+    embed.add_field(name="Название роли", value=f"`{role.name}`", inline=True)
+    embed.add_field(
+        name="Как использовать", 
+        value=f"• `{PREFIX}lock [тип]` - заблокировать каналы для этой роли\n"
+              f"• `{PREFIX}unlock` - разблокировать каналы для этой роли",
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='lock')
+@is_mod()
+@command_enabled()
+async def lock_command(ctx, lock_type: str = "send"):
+    global last_locked_role
+    
+    role_id = None
+    
+    # Проверяем, есть ли сохраненная роль
+    if ctx.guild.id in last_locked_role:
+        role_id = last_locked_role[ctx.guild.id]
+    else:
+        # Проверяем настройки сервера
+        settings = await db.get_guild_settings(ctx.guild.id)
+        role_id = settings.get('default_lock_role_id')
+    
+    if not role_id:
+        embed = discord.Embed(
+            title="❌ Роль не установлена",
+            description=f"Сначала используйте `{PREFIX}lockrole @роль` чтобы указать, с какой ролью работать!\n"
+                       f"Или установите роль по умолчанию в веб-панели: http://0.0.0.0:{PORT}/admin/{ctx.guild.id}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    target_role = ctx.guild.get_role(role_id)
+    
+    if not target_role:
+        if ctx.guild.id in last_locked_role:
+            del last_locked_role[ctx.guild.id]
+        embed = discord.Embed(
+            title="❌ Роль не найдена",
+            description=f"Роль с ID `{role_id}` больше не существует на сервере.\n"
+                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    lock_types = ['send', 'view', 'both']
+    
+    if lock_type.lower() not in lock_types:
+        embed = discord.Embed(
+            title="❌ Неверный тип блокировки",
+            description=f"Доступные типы: {', '.join(lock_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="🔒 Блокировка каналов",
+        description=f"Начинаю блокировку каналов для роли {target_role.mention}...",
+        color=COLORS['warning']
+    )
+    
+    lock_info = {
+        'send': "📝 Запрещено писать, ставить реакции и прикреплять файлы",
+        'view': "👁️ Запрещено читать и писать (канал скрыт)",
+        'both': "🚫 Полная блокировка"
+    }
+    
+    embed.add_field(name="Тип блокировки", value=lock_info[lock_type.lower()], inline=False)
+    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
+    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
+    
+    message = await safe_send(ctx, embed=embed)
+    if not message:
+        return
+    
+    results = await lock_all_channels_in_list(ctx.guild, target_role, lock_type.lower())
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "lock_channels",
+        f"Блокировка для роли {target_role.name} ({target_role.id}), тип: {lock_type}"
+    )
+    
+    success_count = sum(1 for r in results if "✅" in r)
+    warning_count = sum(1 for r in results if "⚠️" in r)
+    error_count = sum(1 for r in results if "❌" in r)
+    
+    final_embed = discord.Embed(
+        title="✅ Блокировка завершена",
+        color=COLORS['success'] if error_count == 0 else COLORS['warning']
+    )
+    
+    final_embed.add_field(
+        name="📊 Результаты",
+        value=f"✅ Успешно: {success_count} каналов\n"
+              f"⚠️ С предупреждениями: {warning_count} каналов\n"
+              f"❌ Ошибки: {error_count} каналов",
+        inline=False
+    )
+    
+    if len(results) <= 10:
+        final_embed.add_field(
+            name="📝 Детали",
+            value="\n".join(results[:10]),
+            inline=False
+        )
+    else:
+        final_embed.add_field(
+            name="ℹ️ Информация",
+            value=f"Обработано {len(results)} каналов",
+            inline=False
+        )
+    
+    final_embed.add_field(
+        name="🎯 Для роли",
+        value=f"{target_role.mention} (ID: `{target_role.id}`)",
+        inline=True
+    )
+    
+    final_embed.add_field(
+        name="👤 Заблокировал",
+        value=ctx.author.mention,
+        inline=True
+    )
+    
+    final_embed.set_footer(text=f"Тип блокировки: {lock_type.upper()}")
+    
+    await safe_edit(message, embed=final_embed)
+
+@bot.command(name='unlock')
+@is_mod()
+@command_enabled()
+async def unlock_command(ctx):
+    global last_locked_role
+    
+    role_id = None
+    
+    # Проверяем, есть ли сохраненная роль
+    if ctx.guild.id in last_locked_role:
+        role_id = last_locked_role[ctx.guild.id]
+    else:
+        # Проверяем настройки сервера
+        settings = await db.get_guild_settings(ctx.guild.id)
+        role_id = settings.get('default_lock_role_id')
+    
+    if not role_id:
+        embed = discord.Embed(
+            title="❌ Роль не установлена",
+            description=f"Сначала используйте `{PREFIX}lockrole @роль` чтобы указать, с какой ролью работать!\n"
+                       f"Или установите роль по умолчанию в веб-панели: http://0.0.0.0:{PORT}/admin/{ctx.guild.id}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    target_role = ctx.guild.get_role(role_id)
+    
+    if not target_role:
+        if ctx.guild.id in last_locked_role:
+            del last_locked_role[ctx.guild.id]
+        embed = discord.Embed(
+            title="❌ Роль не найдена",
+            description=f"Роль с ID `{role_id}` больше не существует на сервере.\n"
+                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="🔓 Разблокировка каналов",
+        description=f"Начинаю разблокировку каналов для роли {target_role.mention}...",
+        color=COLORS['info']
+    )
+    
+    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
+    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
+    
+    message = await safe_send(ctx, embed=embed)
+    if not message:
+        return
+    
+    results = await unlock_all_channels_in_list(ctx.guild, target_role)
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "unlock_channels",
+        f"Разблокировка для роли {target_role.name} ({target_role.id})"
+    )
+    
+    success_count = sum(1 for r in results if "✅" in r)
+    warning_count = sum(1 for r in results if "⚠️" in r)
+    error_count = sum(1 for r in results if "❌" in r)
+    
+    final_embed = discord.Embed(
+        title="✅ Разблокировка завершена",
+        color=COLORS['success'] if error_count == 0 else COLORS['warning']
+    )
+    
+    final_embed.description = f"Каналы разблокированы для роли {target_role.mention}"
+    
+    final_embed.add_field(
+        name="📊 Результаты",
+        value=f"✅ Успешно: {success_count} каналов\n"
+              f"⚠️ С предупреждениями: {warning_count} каналов\n"
+              f"❌ Ошибки: {error_count} каналов",
+        inline=False
+    )
+    
+    if len(results) <= 10:
+        final_embed.add_field(
+            name="📝 Детали",
+            value="\n".join(results[:10]),
+            inline=False
+        )
+    
+    final_embed.add_field(
+        name="🎯 Для роли",
+        value=f"{target_role.mention} (ID: `{target_role.id}`)",
+        inline=True
+    )
+    
+    final_embed.add_field(
+        name="👤 Разблокировал",
+        value=ctx.author.mention,
+        inline=True
+    )
+    
+    await safe_edit(message, embed=final_embed)
+
+@bot.command(name='currentrole')
+@is_mod()
+@command_enabled()
+async def current_role_command(ctx):
+    global last_locked_role
+    
+    role_id = None
+    
+    # Проверяем, есть ли сохраненная роль
+    if ctx.guild.id in last_locked_role:
+        role_id = last_locked_role[ctx.guild.id]
+    else:
+        # Проверяем настройки сервера
+        settings = await db.get_guild_settings(ctx.guild.id)
+        role_id = settings.get('default_lock_role_id')
+    
+    if not role_id:
+        embed = discord.Embed(
+            title="ℹ️ Роль не установлена",
+            description=f"Сейчас не выбрана ни одна роль.\n"
+                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить роль для команд `!lock` и `!unlock`.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    target_role = ctx.guild.get_role(role_id)
+    
+    if not target_role:
+        embed = discord.Embed(
+            title="⚠️ Роль не найдена",
+            description=f"Сохранена роль с ID `{role_id}`, но она больше не существует на сервере.\n"
+                       f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
+            color=COLORS['warning']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="🎯 Текущая роль",
+        description=f"Команды `!lock` и `!unlock` сейчас работают с ролью {target_role.mention}",
+        color=COLORS['success']
+    )
+    
+    embed.add_field(name="ID роли", value=f"`{target_role.id}`", inline=True)
+    embed.add_field(name="Название роли", value=f"`{target_role.name}`", inline=True)
+    embed.add_field(
+        name="Доступные команды",
+        value=f"• `{PREFIX}lock [тип]` - заблокировать каналы\n"
+              f"• `{PREFIX}unlock` - разблокировать каналы\n"
+              f"• `{PREFIX}lockrole @другая_роль` - сменить роль",
+        inline=False
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='resetrole')
+@is_mod()
+@command_enabled()
+async def reset_role_command(ctx):
+    global last_locked_role
+    
+    if ctx.guild.id not in last_locked_role:
+        embed = discord.Embed(
+            title="ℹ️ Роль не установлена",
+            description="Нет установленной роли для сброса.",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    del last_locked_role[ctx.guild.id]
+    
+    embed = discord.Embed(
+        title="✅ Роль сброшена",
+        description=f"Теперь команды `!lock` и `!unlock` не будут работать, пока вы не установите новую роль с помощью `{PREFIX}lockrole @роль`.",
+        color=COLORS['success']
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+# ========== КОМАНДЫ ДЛЯ КЛАНОВ ==========
+
+@bot.command(name='allyclans')
+@command_enabled()
+async def ally_clans(ctx):
+    clans = await db.get_clans_by_type(ctx.guild.id, 'ally')
+    
+    if not clans:
+        embed = discord.Embed(
+            title="🤝 Союзные кланы (ALLY)",
+            description=f"❌ В этой категории пока нет кланов.\nДобавьте с помощью `!addclan ally \"название\"`",
+            color=COLORS['info']
+        )
+        embed.set_image(url=GIFS.get('ally', GIFS['peace']))
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="🤝 Союзные кланы (ALLY)",
+        color=COLORS['info']
+    )
+    
+    embed.set_image(url=GIFS.get('ally', GIFS['peace']))
+    
+    for clan in clans:
+        clan_name = clan['name']
+        if clan['tag']:
+            clan_name = f"[{clan['tag']}] {clan_name}"
+        
+        if clan['description']:
+            embed.add_field(
+                name=clan_name,
+                value=clan['description'],
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name=clan_name,
+                value="​",
+                inline=False
+            )
+    
+    count = len(clans)
+    total_clans = await db.get_clan_count(ctx.guild.id)
+    embed.set_footer(text=f"Всего в категории: {count} | Всего кланов на сервере: {total_clans}")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='enemyclans')
+@command_enabled()
+async def enemy_clans(ctx):
+    clans = await db.get_clans_by_type(ctx.guild.id, 'enemy')
+    
+    if not clans:
+        embed = discord.Embed(
+            title="⚔️ Вражеские кланы (ENEMY)",
+            description=f"❌ В этой категории пока нет кланов.\nДобавьте с помощью `!addclan enemy \"название\"`",
+            color=COLORS['info']
+        )
+        embed.set_image(url=GIFS.get('enemy', GIFS['peace']))
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="⚔️ Вражеские кланы (ENEMY)",
+        color=COLORS['info']
+    )
+    
+    embed.set_image(url=GIFS.get('enemy', GIFS['peace']))
+    
+    for clan in clans:
+        clan_name = clan['name']
+        if clan['tag']:
+            clan_name = f"[{clan['tag']}] {clan_name}"
+        
+        if clan['description']:
+            embed.add_field(
+                name=clan_name,
+                value=clan['description'],
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name=clan_name,
+                value="​",
+                inline=False
+            )
+    
+    count = len(clans)
+    total_clans = await db.get_clan_count(ctx.guild.id)
+    embed.set_footer(text=f"Всего в категории: {count} | Всего кланов на сервере: {total_clans}")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='peaceclans')
+@command_enabled()
+async def peace_clans(ctx):
+    clans = await db.get_clans_by_type(ctx.guild.id, 'peace')
+    
+    if not clans:
+        embed = discord.Embed(
+            title="🕊️ Нейтральные кланы (PEACE)",
+            description=f"❌ В этой категории пока нет кланов.\nДобавьте с помощью `!addclan peace \"название\"`",
+            color=COLORS['info']
+        )
+        embed.set_image(url=GIFS.get('peace', GIFS['peace']))
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="🕊️ Нейтральные кланы (PEACE)",
+        color=COLORS['info']
+    )
+    
+    embed.set_image(url=GIFS.get('peace', GIFS['peace']))
+    
+    for clan in clans:
+        clan_name = clan['name']
+        if clan['tag']:
+            clan_name = f"[{clan['tag']}] {clan_name}"
+        
+        if clan['description']:
+            embed.add_field(
+                name=clan_name,
+                value=clan['description'],
+                inline=False
+            )
+        else:
+            embed.add_field(
+                name=clan_name,
+                value="​",
+                inline=False
+            )
+    
+    count = len(clans)
+    total_clans = await db.get_clan_count(ctx.guild.id)
+    embed.set_footer(text=f"Всего в категории: {count} | Всего кланов на сервере: {total_clans}")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='allclans')
+@command_enabled()
+async def all_clans(ctx):
+    clans = await db.get_all_clans(ctx.guild.id)
+    
+    if not clans:
+        embed = discord.Embed(
+            title="📋 Список кланов пуст",
+            description="Добавьте кланы с помощью команды `!addclan`",
+            color=COLORS['info']
+        )
+        embed.set_image(url=GIFS['peace'])
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="📋 Все кланы на сервере",
+        description=f"Всего кланов: **{len(clans)}**",
+        color=COLORS['info']
+    )
+    
+    embed.set_image(url=GIFS['peace'])
+    
+    ally_clans_list = [c for c in clans if c['clan_type'] == 'ally']
+    enemy_clans_list = [c for c in clans if c['clan_type'] == 'enemy']
+    peace_clans_list = [c for c in clans if c['clan_type'] == 'peace']
+    
+    if ally_clans_list:
+        ally_text = []
+        for clan in ally_clans_list[:10]:
+            name = clan['name']
+            if clan['tag']:
+                name = f"[{clan['tag']}] {name}"
+            ally_text.append(f"• {name}")
+        
+        if len(ally_clans_list) > 10:
+            ally_text.append(f"*... и ещё {len(ally_clans_list) - 10}*")
+        
+        embed.add_field(
+            name=f"🤝 Союзники ({len(ally_clans_list)})",
+            value="\n".join(ally_text) if ally_text else "​",
+            inline=False
+        )
+    
+    if peace_clans_list:
+        peace_text = []
+        for clan in peace_clans_list[:10]:
+            name = clan['name']
+            if clan['tag']:
+                name = f"[{clan['tag']}] {name}"
+            peace_text.append(f"• {name}")
+        
+        if len(peace_clans_list) > 10:
+            peace_text.append(f"*... и ещё {len(peace_clans_list) - 10}*")
+        
+        embed.add_field(
+            name=f"🕊️ Нейтральные ({len(peace_clans_list)})",
+            value="\n".join(peace_text) if peace_text else "​",
+            inline=False
+        )
+    
+    if enemy_clans_list:
+        enemy_text = []
+        for clan in enemy_clans_list[:10]:
+            name = clan['name']
+            if clan['tag']:
+                name = f"[{clan['tag']}] {name}"
+            enemy_text.append(f"• {name}")
+        
+        if len(enemy_clans_list) > 10:
+            enemy_text.append(f"*... и ещё {len(enemy_clans_list) - 10}*")
+        
+        embed.add_field(
+            name=f"⚔️ Враги ({len(enemy_clans_list)})",
+            value="\n".join(enemy_text) if enemy_text else "​",
+            inline=False
+        )
+    
+    if len(clans) > 30:
+        embed.add_field(
+            name="📊 Статистика",
+            value=f"Для просмотра полного списка используйте:\n"
+                  f"• `!allyclans` - союзники\n"
+                  f"• `!enemyclans` - враги\n"
+                  f"• `!peaceclans` - нейтральные",
+            inline=False
+        )
+    
+    embed.set_footer(text="Для добавления кланов используйте !addclan")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='addclan')
+@is_mod()
+@command_enabled()
+async def add_clan(ctx, clan_type: str, name: str, tag: str = None, *, description: str = None):
+    valid_types = ['ally', 'enemy', 'peace']
+    clan_type = clan_type.lower()
+    
+    if clan_type not in valid_types:
+        embed = discord.Embed(
+            title="❌ Неверный тип клана",
+            description=f"Доступные типы: {', '.join(valid_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    success, message = await db.add_clan(
+        ctx.guild.id, name, clan_type, tag, description, ctx.author.id
+    )
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "add_clan",
+        f"Добавлен клан {name} (тип: {clan_type})"
+    )
+    
+    if success:
+        embed = discord.Embed(
+            title=f"{db.get_type_emoji(clan_type)} Клан добавлен",
+            description=message,
+            color=COLORS['success']
+        )
+        
+        embed.add_field(name="🏷️ Название", value=f"**{name}**", inline=True)
+        if tag:
+            embed.add_field(name="📌 Тег", value=f"`[{tag}]`", inline=True)
+        embed.add_field(name="📂 Категория", value=db.get_type_name(clan_type), inline=True)
+        
+        if description:
+            embed.add_field(name="📝 Описание", value=description, inline=False)
+        
+        embed.add_field(name="👤 Добавил", value=ctx.author.mention, inline=True)
+        
+        count = await db.get_clan_count(ctx.guild.id)
+        embed.set_footer(text=f"Всего кланов в базе: {count}")
+    else:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=message,
+            color=COLORS['error']
+        )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='removeclan')
+@is_mod()
+@command_enabled()
+async def remove_clan(ctx, clan_type: str = None, *, name: str):
+    if clan_type and clan_type.lower() not in ['ally', 'enemy', 'peace']:
+        name = f"{clan_type} {name}"
+        clan_type = None
+    
+    if clan_type:
+        clan_type = clan_type.lower()
+    
+    embed = discord.Embed(
+        title="⚠️ Подтверждение удаления",
+        description=f"Вы уверены, что хотите удалить клан **{name}**" + 
+                   (f" из категории **{db.get_type_name(clan_type)}**?" if clan_type else " из всех категорий?"),
+        color=COLORS['warning']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        success, message = await db.remove_clan(ctx.guild.id, name, clan_type)
+        
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "remove_clan",
+            f"Удален клан {name}" + (f" (тип: {clan_type})" if clan_type else "")
+        )
+        
+        if success:
+            result_embed = discord.Embed(
+                title="✅ Клан удален",
+                description=message,
+                color=COLORS['success']
+            )
+        else:
+            result_embed = discord.Embed(
+                title="❌ Ошибка",
+                description=message,
+                color=COLORS['error']
+            )
+        
+        await interaction.response.edit_message(embed=result_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Удаление отменено",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='claninfo')
+@command_enabled()
+async def clan_info(ctx, clan_type: str, *, name: str):
+    valid_types = ['ally', 'enemy', 'peace']
+    clan_type = clan_type.lower()
+    
+    if clan_type not in valid_types:
+        embed = discord.Embed(
+            title="❌ Неверный тип клана",
+            description=f"Доступные типы: {', '.join(valid_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    clans = await db.get_clans_by_type(ctx.guild.id, clan_type)
+    clan = None
+    for c in clans:
+        if c['name'].lower() == name.lower():
+            clan = c
+            break
+    
+    if not clan:
+        embed = discord.Embed(
+            title="❌ Клан не найден",
+            description=f"Клан **{name}** не найден в категории **{db.get_type_name(clan_type)}**",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title=f"{db.get_type_emoji(clan_type)} Информация о клане {clan['name']}",
+        color=COLORS['info']
+    )
+    
+    if clan['tag']:
+        embed.add_field(name="📌 Тег", value=f"`[{clan['tag']}]`", inline=True)
+    
+    embed.add_field(name="📂 Категория", value=db.get_type_name(clan_type), inline=True)
+    
+    if clan['description']:
+        embed.add_field(name="📝 Описание", value=clan['description'], inline=False)
+    
+    try:
+        added_by = await ctx.guild.fetch_member(clan['added_by'])
+        added_by_name = added_by.display_name if added_by else f"ID: {clan['added_by']}"
+    except:
+        added_by_name = f"ID: {clan['added_by']}"
+    
+    embed.add_field(name="👤 Добавил", value=added_by_name, inline=True)
+    embed.add_field(name="🕒 Дата добавления", value=clan['added_at'].strftime('%d.%m.%Y %H:%M'), inline=True)
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='editclan')
+@is_mod()
+@command_enabled()
+async def edit_clan(ctx, clan_type: str, name: str, field: str, *, value: str):
+    valid_types = ['ally', 'enemy', 'peace']
+    clan_type = clan_type.lower()
+    
+    if clan_type not in valid_types:
+        embed = discord.Embed(
+            title="❌ Неверный тип клана",
+            description=f"Доступные типы: {', '.join(valid_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    field = field.lower()
+    
+    if field == 'tag':
+        success, message = await db.update_clan_tag(
+            ctx.guild.id, name, clan_type, value
+        )
+        embed = discord.Embed(
+            title="✅ Тег обновлен" if success else "❌ Ошибка",
+            description=message,
+            color=COLORS['success'] if success else COLORS['error']
+        )
+    elif field == 'desc' or field == 'description':
+        success, message = await db.update_clan_description(
+            ctx.guild.id, name, clan_type, value
+        )
+        embed = discord.Embed(
+            title="✅ Описание обновлено" if success else "❌ Ошибка",
+            description=message,
+            color=COLORS['success'] if success else COLORS['error']
+        )
+    else:
+        embed = discord.Embed(
+            title="❌ Неверное поле",
+            description=f"Доступные поля: tag, desc",
+            color=COLORS['error']
+        )
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "edit_clan",
+        f"Изменен клан {name}, поле {field}"
+    )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='searchclan')
+@command_enabled()
+async def search_clan(ctx, *, search_term: str):
+    clans = await db.search_clan(ctx.guild.id, search_term)
+    
+    if not clans:
+        embed = discord.Embed(
+            title="🔍 Результаты поиска",
+            description=f"Кланы по запросу **{search_term}** не найдены",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title=f"🔍 Результаты поиска: {search_term}",
+        description=f"Найдено кланов: **{len(clans)}**",
+        color=COLORS['info']
+    )
+    
+    for clan_type in ['ally', 'peace', 'enemy']:
+        type_clans = [c for c in clans if c['clan_type'] == clan_type]
+        if type_clans:
+            clan_names = []
+            for clan in type_clans[:5]:
+                name = clan['name']
+                if clan['tag']:
+                    name = f"[{clan['tag']}] {name}"
+                clan_names.append(f"• {name}")
+            
+            if len(type_clans) > 5:
+                clan_names.append(f"*... и ещё {len(type_clans) - 5}*")
+            
+            embed.add_field(
+                name=f"{db.get_type_emoji(clan_type)} {db.get_type_name(clan_type)} ({len(type_clans)})",
+                value="\n".join(clan_names),
+                inline=False
+            )
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='clearclans')
+@is_mod()
+@command_enabled()
+async def clear_clans(ctx):
+    count = await db.get_clan_count(ctx.guild.id)
+    
+    if count == 0:
+        embed = discord.Embed(
+            title="ℹ️ Нет кланов",
+            description="На сервере нет кланов для удаления",
+            color=COLORS['info']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    embed = discord.Embed(
+        title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
+        description=f"Вы уверены, что хотите удалить ВСЕ кланы ({count} шт.)?\nЭто действие необратимо!",
+        color=COLORS['error']
+    )
+    
+    view = discord.ui.View(timeout=30)
+    
+    async def confirm_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
+            return
+        
+        await db.clear_all_clans(ctx.guild.id)
+        
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "clear_clans",
+            f"Удалены все кланы ({count} шт.)"
+        )
+        
+        confirm_embed = discord.Embed(
+            title="✅ Все кланы удалены",
+            description=f"Удалено {count} кланов",
+            color=COLORS['success']
+        )
+        await interaction.response.edit_message(embed=confirm_embed, view=None)
+    
+    async def cancel_callback(interaction):
+        if interaction.user != ctx.author:
+            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
+            return
+        
+        cancel_embed = discord.Embed(
+            title="❌ Удаление отменено",
+            color=COLORS['warning']
+        )
+        await interaction.response.edit_message(embed=cancel_embed, view=None)
+    
+    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
+    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
+    
+    confirm_button.callback = confirm_callback
+    cancel_button.callback = cancel_callback
+    
+    view.add_item(confirm_button)
+    view.add_item(cancel_button)
+    
+    await safe_send(ctx, embed=embed, view=view)
+
+@bot.command(name='setclangif')
+@is_mod()
+@command_enabled()
+async def set_clan_gif(ctx, clan_type: str, gif_url: str):
+    valid_types = ['ally', 'enemy', 'peace']
+    
+    if clan_type.lower() not in valid_types:
+        embed = discord.Embed(
+            title="❌ Ошибка",
+            description=f"Доступные типы: {', '.join(valid_types)}",
+            color=COLORS['error']
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    GIFS[clan_type.lower()] = gif_url
+    
+    embed = discord.Embed(
+        title="✅ Гифка обновлена",
+        description=f"Для типа **{clan_type}** установлена новая гифка",
+        color=COLORS['success']
+    )
+    embed.set_image(url=gif_url)
+    
+    await safe_send(ctx, embed=embed)
 
 # ========== СИСТЕМА ВОУЧЕЙ (ГОЛОСОВАНИЯ) ==========
 
@@ -5220,8 +4482,11 @@ class VouchView(discord.ui.View):
                 await self.update_embed()
                 
                 if self.message and self.message.guild:
+                    # Получаем админские роли из настроек
+                    mod_role_ids = await db.get_mod_role_ids(self.message.guild.id)
                     admin_mentions = []
-                    for role_id in ADMIN_ROLE_IDS:
+                    
+                    for role_id in mod_role_ids:
                         role = self.message.guild.get_role(role_id)
                         if role:
                             admin_mentions.append(role.mention)
@@ -5347,13 +4612,18 @@ class VouchGiveRoleButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction):
         view: VouchView = self.view
         
-        is_admin = interaction.user.guild_permissions.administrator
-        if not is_admin:
+        # Проверяем права (модератор или админ)
+        is_mod = False
+        if interaction.user.guild_permissions.administrator:
+            is_mod = True
+        else:
             user_role_ids = [role.id for role in interaction.user.roles]
-            is_admin = any(admin_role_id in user_role_ids for admin_role_id in ADMIN_ROLE_IDS)
+            mod_role_ids = await db.get_mod_role_ids(interaction.guild.id)
+            if any(mod_role_id in user_role_ids for mod_role_id in mod_role_ids):
+                is_mod = True
         
-        if not is_admin:
-            await interaction.response.send_message("❌ Только администраторы могут выдавать роли!", ephemeral=True)
+        if not is_mod:
+            await interaction.response.send_message("❌ Только модераторы и администраторы могут выдавать роли!", ephemeral=True)
             return
         
         if view.is_completed:
@@ -5365,9 +4635,17 @@ class VouchGiveRoleButton(discord.ui.Button):
             return
         
         try:
-            await view.target_user.add_roles(view.target_role, reason=f"Повышение по результатам голосования (админ: {interaction.user})")
+            await view.target_user.add_roles(view.target_role, reason=f"Повышение по результатам голосования (модератор: {interaction.user})")
             
             view.is_completed = True
+            
+            # Логируем действие
+            await db.add_action_log(
+                interaction.guild.id,
+                interaction.user.id,
+                "vouch_give_role",
+                f"Выдана роль {view.target_role.name} пользователю {view.target_user.id} по голосованию"
+            )
             
             embed = discord.Embed(
                 title="✅ РОЛЬ ВЫДАНА",
@@ -5414,7 +4692,8 @@ class VouchGiveRoleButton(discord.ui.Button):
 active_vouches = {}
 
 @bot.command(name='vouch')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def vouch_command(ctx, member: discord.Member, role: discord.Role):
     if member.id == ctx.author.id:
         embed = discord.Embed(
@@ -5443,14 +4722,6 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         await safe_send(ctx, embed=embed)
         return
     
-    if member.guild_permissions.administrator:
-        embed = discord.Embed(
-            title="⚠️ Предупреждение",
-            description="Вы проводите голосование за администратора сервера. Убедитесь, что это необходимо.",
-            color=COLORS['warning']
-        )
-        await safe_send(ctx, embed=embed)
-    
     if ctx.channel.id in active_vouches:
         embed = discord.Embed(
             title="❌ Ошибка",
@@ -5469,8 +4740,8 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
                    f"• Голосовать могут все участники сервера\n"
                    f"• **Нельзя голосовать за самого себя**\n"
                    f"• Для выдачи роли нужно **минимум 5 голосов ЗА**\n"
-                   f"• После набора 5+ голосов появится кнопка для администратора\n"
-                   f"• Только администратор может выдать роль\n"
+                   f"• После набора 5+ голосов появится кнопка для модератора\n"
+                   f"• Только модераторы могут выдать роль\n"
                    f"• Голосование длится **2 часа**",
         color=discord.Color.blue()
     )
@@ -5514,7 +4785,8 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         logger.info(f"Создано голосование за {member} до роли {role} пользователем {ctx.author}")
 
 @bot.command(name='endvouch')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def end_vouch_command(ctx):
     if ctx.channel.id not in active_vouches:
         embed = discord.Embed(
@@ -5541,6 +4813,14 @@ async def end_vouch_command(ctx):
             return
         
         view.is_completed = True
+        
+        # Логируем действие
+        await db.add_action_log(
+            ctx.guild.id,
+            ctx.author.id,
+            "end_vouch",
+            f"Принудительное завершение голосования за {view.target_user.id}"
+        )
         
         for item in view.children:
             item.disabled = True
@@ -5589,6 +4869,7 @@ async def end_vouch_command(ctx):
     await safe_send(ctx, embed=embed, view=view_confirm)
 
 @bot.command(name='vouchinfo')
+@command_enabled()
 async def vouch_info_command(ctx):
     if ctx.channel.id not in active_vouches:
         embed = discord.Embed(
@@ -5623,7 +4904,7 @@ async def vouch_info_command(ctx):
     if has_give_button:
         embed.add_field(
             name="🎁 Статус",
-            value="✅ Условие выполнено! Администратор может выдать роль.",
+            value="✅ Условие выполнено! Модератор может выдать роль.",
             inline=False
         )
     else:
@@ -5680,30 +4961,33 @@ async def check_expired_vouches():
         
         await asyncio.sleep(60)
 
-# ========== СИСТЕМА ВЕРИФИКАЦИИ РОЛЕЙ ==========
-
-# Хранилище настроек верификации для каждого сервера
-# {guild_id: {"verify_role_id": int, "unverify_role_id": int}}
-verify_settings = {}
+# ========== СИСТЕМА ВЕРИФИКАЦИИ ==========
 
 @bot.command(name='verifyrole')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def set_verify_roles(ctx, verify_role: discord.Role, unverify_role: discord.Role):
     """
     Установить роли для системы верификации
     
     Пример: !verifyrole @Верифицирован @Неверифицирован
-    
-    Первая роль - будет выдаваться при !verify
-    Вторая роль - будет сниматься при !verify
     """
-    global verify_settings
     
-    # Сохраняем ID ролей для этого сервера
-    verify_settings[ctx.guild.id] = {
-        "verify_role_id": verify_role.id,
-        "unverify_role_id": unverify_role.id
-    }
+    # Получаем текущие настройки
+    settings = await db.get_guild_settings(ctx.guild.id)
+    settings['verify_role_id'] = verify_role.id
+    settings['unverify_role_id'] = unverify_role.id
+    
+    # Сохраняем в БД
+    await db.update_guild_settings(ctx.guild.id, settings, ctx.author.id)
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "set_verify_roles",
+        f"Verify: {verify_role.id}, Unverify: {unverify_role.id}"
+    )
     
     embed = discord.Embed(
         title="✅ Роли верификации установлены",
@@ -5731,16 +5015,18 @@ async def set_verify_roles(ctx, verify_role: discord.Role, unverify_role: discor
     
     await safe_send(ctx, embed=embed)
 
-
 @bot.command(name='clearverifyroles')
-@is_admin()
+@is_mod()
+@command_enabled()
 async def unset_verify_roles(ctx):
-    """
-    Сбросить настройки верификации на сервере
-    """
-    global verify_settings
+    """Сбросить настройки верификации на сервере"""
     
-    if ctx.guild.id not in verify_settings:
+    # Получаем текущие настройки
+    settings = await db.get_guild_settings(ctx.guild.id)
+    old_verify = settings.get('verify_role_id')
+    old_unverify = settings.get('unverify_role_id')
+    
+    if not old_verify and not old_unverify:
         embed = discord.Embed(
             title="ℹ️ Роли не настроены",
             description="На этом сервере не настроены роли верификации.",
@@ -5750,7 +5036,17 @@ async def unset_verify_roles(ctx):
         return
     
     # Удаляем настройки
-    del verify_settings[ctx.guild.id]
+    settings['verify_role_id'] = None
+    settings['unverify_role_id'] = None
+    await db.update_guild_settings(ctx.guild.id, settings, ctx.author.id)
+    
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "clear_verify_roles",
+        f"Удалены роли верификации"
+    )
     
     embed = discord.Embed(
         title="✅ Настройки сброшены",
@@ -5760,19 +5056,22 @@ async def unset_verify_roles(ctx):
     
     await safe_send(ctx, embed=embed)
 
-
 @bot.command(name='verify')
-@is_admin_or_mod()
+@is_mod()
+@command_enabled()
 async def verify_user(ctx, member: discord.Member):
     """
     Верифицировать пользователя (выдать verify роль и снять unverify)
     
     Пример: !verify @user
     """
-    global verify_settings
     
-    # Проверяем, настроены ли роли на этом сервере
-    if ctx.guild.id not in verify_settings:
+    # Получаем настройки
+    settings = await db.get_guild_settings(ctx.guild.id)
+    verify_role_id = settings.get('verify_role_id')
+    unverify_role_id = settings.get('unverify_role_id')
+    
+    if not verify_role_id or not unverify_role_id:
         embed = discord.Embed(
             title="❌ Роли не настроены",
             description=f"Сначала используйте `{PREFIX}verifyrole @роль1 @роль2` чтобы установить роли верификации.",
@@ -5780,10 +5079,6 @@ async def verify_user(ctx, member: discord.Member):
         )
         await safe_send(ctx, embed=embed)
         return
-    
-    settings = verify_settings[ctx.guild.id]
-    verify_role_id = settings["verify_role_id"]
-    unverify_role_id = settings["unverify_role_id"]
     
     # Получаем объекты ролей
     verify_role = ctx.guild.get_role(verify_role_id)
@@ -5819,7 +5114,7 @@ async def verify_user(ctx, member: discord.Member):
         await safe_send(ctx, embed=embed)
         return
     
-    # Проверяем иерархию ролей (роль бота должна быть выше)
+    # Проверяем иерархию ролей
     if verify_role.position >= ctx.guild.me.top_role.position:
         embed = discord.Embed(
             title="❌ Ошибка иерархии",
@@ -5836,7 +5131,7 @@ async def verify_user(ctx, member: discord.Member):
     # Снимаем unverify роль (если есть)
     if unverify_role in member.roles:
         try:
-            await member.remove_roles(unverify_role, reason=f"Верификация пользователя (админ: {ctx.author})")
+            await member.remove_roles(unverify_role, reason=f"Верификация пользователя (модератор: {ctx.author})")
             results.append(f"✅ Снята роль {unverify_role.mention}")
         except discord.Forbidden:
             errors.append(f"❌ Нет прав для снятия роли {unverify_role.mention}")
@@ -5848,7 +5143,7 @@ async def verify_user(ctx, member: discord.Member):
     # Выдаем verify роль (если ещё нет)
     if verify_role not in member.roles:
         try:
-            await member.add_roles(verify_role, reason=f"Верификация пользователя (админ: {ctx.author})")
+            await member.add_roles(verify_role, reason=f"Верификация пользователя (модератор: {ctx.author})")
             results.append(f"✅ Выдана роль {verify_role.mention}")
         except discord.Forbidden:
             errors.append(f"❌ Нет прав для выдачи роли {verify_role.mention}")
@@ -5857,10 +5152,18 @@ async def verify_user(ctx, member: discord.Member):
     else:
         results.append(f"ℹ️ У пользователя уже есть роль {verify_role.mention}")
     
+    # Логируем действие
+    await db.add_action_log(
+        ctx.guild.id,
+        ctx.author.id,
+        "verify_user",
+        f"Верификация пользователя {member.id}"
+    )
+    
     # Создаем embed с результатом
     embed = discord.Embed(
         title="🔐 Верификация пользователя",
-        description=f"**Пользователь:** {member.mention}\n**Админ:** {ctx.author.mention}",
+        description=f"**Пользователь:** {member.mention}\n**Модератор:** {ctx.author.mention}",
         color=COLORS['success'] if not errors else COLORS['warning']
     )
     
@@ -5880,16 +5183,19 @@ async def verify_user(ctx, member: discord.Member):
     
     await safe_send(ctx, embed=embed)
 
-
 @bot.command(name='verifyinfo')
-@is_admin_or_mod()
+@is_mod()
+@command_enabled()
 async def verify_info(ctx):
     """
     Показать текущие настройки верификации на сервере
     """
-    global verify_settings
     
-    if ctx.guild.id not in verify_settings:
+    settings = await db.get_guild_settings(ctx.guild.id)
+    verify_role_id = settings.get('verify_role_id')
+    unverify_role_id = settings.get('unverify_role_id')
+    
+    if not verify_role_id or not unverify_role_id:
         embed = discord.Embed(
             title="ℹ️ Настройки верификации",
             description=f"На этом сервере не настроены роли верификации.\n"
@@ -5899,9 +5205,8 @@ async def verify_info(ctx):
         await safe_send(ctx, embed=embed)
         return
     
-    settings = verify_settings[ctx.guild.id]
-    verify_role = ctx.guild.get_role(settings["verify_role_id"])
-    unverify_role = ctx.guild.get_role(settings["unverify_role_id"])
+    verify_role = ctx.guild.get_role(verify_role_id)
+    unverify_role = ctx.guild.get_role(unverify_role_id)
     
     embed = discord.Embed(
         title="🔐 Настройки верификации",
@@ -5910,354 +5215,251 @@ async def verify_info(ctx):
     
     embed.add_field(
         name="✅ Verify роль",
-        value=verify_role.mention if verify_role else f"Роль не найдена (ID: {settings['verify_role_id']})",
+        value=verify_role.mention if verify_role else f"Роль не найдена (ID: {verify_role_id})",
         inline=True
     )
     
     embed.add_field(
         name="❌ Unverify роль",
-        value=unverify_role.mention if unverify_role else f"Роль не найдена (ID: {settings['unverify_role_id']})",
+        value=unverify_role.mention if unverify_role else f"Роль не найдена (ID: {unverify_role_id})",
         inline=True
     )
     
     embed.add_field(
         name="📋 Команды",
         value=f"`{PREFIX}verify @user` - верифицировать\n"
-              f"`{PREFIX}unverifyrole` - сбросить настройки",
+              f"`{PREFIX}clearverifyroles` - сбросить настройки",
         inline=False
     )
     
     await safe_send(ctx, embed=embed)
 
+# ========== OAuth2 КОМАНДЫ ==========
+
+@bot.command(name='oauth')
+@command_enabled()
+async def oauth_command(ctx):
+    """Получить ссылку для OAuth2 проверки всех серверов пользователя"""
+    embed = discord.Embed(
+        title="🔍 OAuth2 Проверка серверов",
+        description="Перейдите по ссылке ниже, чтобы проверить ВСЕ серверы, где состоит пользователь (даже те, где нет бота)",
+        color=COLORS['info']
+    )
     
-    # Получаем всех пользователей с указанной ролью
-    members_with_role = [m for m in ctx.guild.members if role in m.roles]
+    oauth_url = f"https://husseinbot2.onrender.com/oauth2/login"
     
-    if not members_with_role:
+    embed.add_field(
+        name="📋 Инструкция",
+        value="1. Перейдите по ссылке\n"
+              "2. Авторизуйтесь через Discord\n"
+              "3. Вернитесь в Discord и используйте !checkoauth @user\n\n"
+              f"🔗 **Ссылка**: [Нажмите для проверки]({oauth_url})",
+        inline=False
+    )
+    
+    embed.set_footer(text="Внимание: сайт запросит доступ к списку ваших серверов")
+    
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='checkoauth')
+@is_mod()
+@command_enabled()
+async def check_oauth_user(ctx, user: discord.User):
+    """
+    Проверить данные OAuth2 пользователя (если он авторизовался)
+    Показывает ВСЕ серверы пользователя
+    
+    Пример: !checkoauth @user
+    """
+    data = await db.get_oauth_data(user.id)
+    
+    if not data:
         embed = discord.Embed(
-            title="ℹ️ Нет пользователей",
-            description=f"Нет пользователей с ролью {role.mention}",
+            title="❌ Данные не найдены",
+            description=f"Пользователь {user.mention} еще не авторизовался через OAuth2",
+            color=COLORS['error']
+        )
+        embed.add_field(
+            name="📋 Инструкция",
+            value=f"Попросите пользователя перейти по ссылке `{PREFIX}oauth` и авторизоваться",
+            inline=False
+        )
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Парсим сохраненные данные о серверах
+    try:
+        guilds_data = ast.literal_eval(data['guilds_data'])
+        if not isinstance(guilds_data, list):
+            guilds_data = []
+    except:
+        guilds_data = []
+    
+    if not guilds_data:
+        embed = discord.Embed(
+            title="ℹ️ Нет данных о серверах",
+            description=f"У пользователя {user.mention} нет сохраненных серверов",
             color=COLORS['info']
         )
         await safe_send(ctx, embed=embed)
         return
     
+    # Создаем embed с результатами
     embed = discord.Embed(
-        title="⏳ Массовая верификация",
-        description=f"Начинаю верификацию **{len(members_with_role)}** пользователей...",
-        color=COLORS['warning']
+        title=f"🔍 OAuth2 данные {user.display_name}",
+        description=f"**Последнее обновление:** {data['last_updated'].strftime('%d.%m.%Y %H:%M')}\n"
+                   f"**Всего серверов:** {len(guilds_data)}",
+        color=COLORS['info']
     )
     
-    message = await safe_send(ctx, embed=embed)
+    embed.set_thumbnail(url=user.display_avatar.url if user.display_avatar else None)
     
-    success = 0
-    failed = 0
+    # Сортируем серверы по названию
+    sorted_guilds = sorted(guilds_data, key=lambda x: x.get('name', '').lower())
     
-    for member in members_with_role:
-        try:
-            # Снимаем unverify роль (текущую)
-            await member.remove_roles(role, reason=f"Массовая верификация (админ: {ctx.author})")
-            # Выдаем verify роль
-            await member.add_roles(verify_role, reason=f"Массовая верификация (админ: {ctx.author})")
-            success += 1
-        except:
-            failed += 1
-        
-        # Небольшая задержка чтобы не забанили за спам
-        await asyncio.sleep(0.5)
+    # Показываем первые 20 серверов
+    servers_text = []
+    for guild in sorted_guilds[:20]:
+        name = guild.get('name', 'Неизвестно')
+        owner = "👑" if guild.get('owner', False) else ""
+        servers_text.append(f"{owner} {name}")
     
-    final_embed = discord.Embed(
-        title="✅ Массовая верификация завершена",
-        color=COLORS['success'] if failed == 0 else COLORS['warning']
-    )
-    
-    final_embed.add_field(
-        name="📊 Результаты",
-        value=f"✅ Успешно: {success}\n❌ Ошибок: {failed}",
-        inline=False
-    )
-    
-    if message:
-        await safe_edit(message, embed=final_embed)
-    else:
-        await safe_send(ctx, embed=final_embed)
-
-@bot.command(name='addmodrole')
-@is_admin()
-async def add_mod_role(ctx, role: discord.Role):
-    """Добавить роль в список модераторских ролей"""
-    global MOD_ROLE_IDS
-    
-    if role.id in MOD_ROLE_IDS:
-        embed = discord.Embed(
-            title="⚠️ Роль уже в списке",
-            description=f"Роль {role.mention} уже есть в списке модераторских ролей!",
-            color=COLORS['warning']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    MOD_ROLE_IDS.append(role.id)
-    
-    # Сохраняем в .env файл
-    try:
-        env_path = '.env'
-        if os.path.exists(env_path):
-            with open(env_path, 'r') as f:
-                lines = f.readlines()
-            
-            mod_roles_str = ','.join(str(id) for id in MOD_ROLE_IDS)
-            found = False
-            for i, line in enumerate(lines):
-                if line.startswith('MOD_ROLE_IDS='):
-                    lines[i] = f'MOD_ROLE_IDS={mod_roles_str}\n'
-                    found = True
-                    break
-            
-            if not found:
-                lines.append(f'MOD_ROLE_IDS={mod_roles_str}\n')
-            
-            with open(env_path, 'w') as f:
-                f.writelines(lines)
-            
-            load_dotenv(override=True)
-    except Exception as e:
-        logger.warning(f"Не удалось обновить .env файл: {e}")
-    
-    embed = discord.Embed(
-        title="✅ Модераторская роль добавлена",
-        description=f"Роль {role.mention} добавлена в список модераторских ролей!",
-        color=COLORS['success']
-    )
+    if len(sorted_guilds) > 20:
+        servers_text.append(f"... и ещё {len(sorted_guilds) - 20} серверов")
     
     embed.add_field(
-        name="📊 Текущие модераторские роли",
-        value="\n".join([f"• <@&{role_id}>" for role_id in MOD_ROLE_IDS]) or "Нет ролей",
+        name="📋 Список серверов",
+        value="\n".join(servers_text) if servers_text else "Нет серверов",
         inline=False
     )
     
-    embed.set_footer(text=f"Всего ролей: {len(MOD_ROLE_IDS)}")
+    embed.set_footer(text=f"ID: {user.id} | Для полного списка используйте !checkoauthfull")
     
     await safe_send(ctx, embed=embed)
 
-
-@bot.command(name='removemodrole')
-@is_admin()
-async def remove_mod_role(ctx, role: discord.Role):
-    """Удалить роль из списка модераторских ролей"""
-    global MOD_ROLE_IDS
+@bot.command(name='checkoauthfull')
+@is_mod()
+@command_enabled()
+async def check_oauth_full(ctx, user: discord.User):
+    """
+    Показать ПОЛНЫЙ список серверов пользователя (в файле, если много)
     
-    if role.id not in MOD_ROLE_IDS:
+    Пример: !checkoauthfull @user
+    """
+    data = await db.get_oauth_data(user.id)
+    
+    if not data:
         embed = discord.Embed(
-            title="❌ Роль не найдена",
-            description=f"Роль {role.mention} не найдена в списке модераторских ролей!",
+            title="❌ Данные не найдены",
+            description=f"Пользователь {user.mention} еще не авторизовался",
             color=COLORS['error']
         )
         await safe_send(ctx, embed=embed)
         return
     
-    MOD_ROLE_IDS.remove(role.id)
-    
-    # Сохраняем в .env файл
     try:
-        env_path = '.env'
-        if os.path.exists(env_path):
-            with open(env_path, 'r') as f:
-                lines = f.readlines()
-            
-            mod_roles_str = ','.join(str(id) for id in MOD_ROLE_IDS)
-            for i, line in enumerate(lines):
-                if line.startswith('MOD_ROLE_IDS='):
-                    lines[i] = f'MOD_ROLE_IDS={mod_roles_str}\n'
-                    break
-            
-            with open(env_path, 'w') as f:
-                f.writelines(lines)
-            
-            load_dotenv(override=True)
-    except Exception as e:
-        logger.warning(f"Не удалось обновить .env файл: {e}")
+        guilds_data = ast.literal_eval(data['guilds_data'])
+    except:
+        guilds_data = []
     
+    if not guilds_data:
+        await safe_send(ctx, "ℹ️ Нет данных о серверах")
+        return
+    
+    # Сортируем серверы по названию
+    sorted_guilds = sorted(guilds_data, key=lambda x: x.get('name', '').lower())
+    
+    # Если серверов меньше 50, показываем в embed
+    if len(sorted_guilds) <= 50:
+        embed = discord.Embed(
+            title=f"📋 Все серверы {user.display_name}",
+            description=f"Всего: **{len(sorted_guilds)}**",
+            color=COLORS['info']
+        )
+        
+        servers_text = []
+        for guild in sorted_guilds:
+            name = guild.get('name', 'Неизвестно')
+            owner = "👑" if guild.get('owner', False) else ""
+            servers_text.append(f"{owner} {name}")
+        
+        # Разбиваем на несколько полей если нужно
+        chunk_size = 20
+        for i in range(0, len(servers_text), chunk_size):
+            chunk = servers_text[i:i+chunk_size]
+            embed.add_field(
+                name=f"Серверы {i+1}-{i+len(chunk)}",
+                value="\n".join(chunk),
+                inline=False
+            )
+        
+        await safe_send(ctx, embed=embed)
+        return
+    
+    # Если серверов больше 50, отправляем файлом
+    filename = f"servers_{user.id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    
+    with open(filename, 'w', encoding='utf-8') as f:
+        f.write(f"Список серверов пользователя {user.display_name} (ID: {user.id})\n")
+        f.write(f"Всего серверов: {len(sorted_guilds)}\n")
+        f.write("=" * 50 + "\n\n")
+        
+        for i, guild in enumerate(sorted_guilds, 1):
+            name = guild.get('name', 'Неизвестно')
+            guild_id = guild.get('id', '?')
+            owner = "👑 ВЛАДЕЛЕЦ" if guild.get('owner', False) else "участник"
+            f.write(f"{i}. {name}\n")
+            f.write(f"   ID: {guild_id} | {owner}\n\n")
+    
+    file = discord.File(filename)
     embed = discord.Embed(
-        title="✅ Модераторская роль удалена",
-        description=f"Роль {role.mention} удалена из списка модераторских ролей!",
+        title=f"📁 Полный список серверов {user.display_name}",
+        description=f"Всего серверов: **{len(sorted_guilds)}**\nФайл отправлен ниже",
         color=COLORS['success']
     )
+    await safe_send(ctx, embed=embed, file=file)
     
-    embed.add_field(
-        name="📊 Текущие модераторские роли",
-        value="\n".join([f"• <@&{role_id}>" for role_id in MOD_ROLE_IDS]) or "Нет ролей",
-        inline=False
+    # Удаляем временный файл
+    os.remove(filename)
+
+# ========== КОМАНДА PING ==========
+
+@bot.command(name='ping')
+@command_enabled()
+async def ping_command(ctx):
+    latency = round(bot.latency * 1000)
+    
+    embed = discord.Embed(
+        title="🏓 Понг!",
+        color=COLORS['success']
     )
+    embed.add_field(name="Задержка API", value=f"**{latency}мс**", inline=True)
+    embed.add_field(name="Серверов", value=f"**{len(bot.guilds)}**", inline=True)
+    embed.add_field(name="Порт веб-сервера", value=f"**{PORT}**", inline=True)
     
-    embed.set_footer(text=f"Всего ролей: {len(MOD_ROLE_IDS)}")
+    db_status = "✅ **Подключена**" if hasattr(db, 'pool') and db.pool else "❌ **Отключена**"
+    embed.add_field(name="Статус БД", value=db_status, inline=True)
+    
+    embed.add_field(name="Режим работы", value="✅ **24/7 Активен**", inline=False)
+    embed.set_footer(text=f"Префикс команд: {PREFIX}")
     
     await safe_send(ctx, embed=embed)
 
-
-@bot.command(name='listmodroles')
-async def list_mod_roles(ctx):
-    """Показать список всех модераторских ролей"""
-    
-    if not MOD_ROLE_IDS:
-        embed = discord.Embed(
-            title="📋 Список модераторских ролей",
-            description="В данный момент нет назначенных модераторских ролей.\n"
-                       f"Используйте `{PREFIX}addmodrole @роль` чтобы добавить роль.",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    embed = discord.Embed(
-        title="📋 Список модераторских ролей",
-        description=f"Всего ролей: **{len(MOD_ROLE_IDS)}**",
-        color=COLORS['info']
-    )
-    
-    roles_info = []
-    for role_id in MOD_ROLE_IDS:
-        role = ctx.guild.get_role(role_id)
-        if role:
-            roles_info.append(f"• {role.mention} (ID: `{role_id}`)")
-        else:
-            roles_info.append(f"• Роль с ID `{role_id}` (не найдена на сервере)")
-    
-    embed.add_field(
-        name="🎭 Роли",
-        value="\n".join(roles_info) if roles_info else "Нет доступных ролей",
-        inline=False
-    )
-    
-    embed.add_field(
-        name="ℹ️ Информация",
-        value="Владельцы этих ролей имеют доступ к модераторским командам.\n"
-              f"Используйте `{PREFIX}addmodrole @роль` чтобы добавить новую роль.\n"
-              f"Используйте `{PREFIX}removemodrole @роль` чтобы удалить роль.",
-        inline=False
-    )
-    
-    await safe_send(ctx, embed=embed)
-
-
-@bot.command(name='clearmodroles')
-@is_admin()
-async def clear_mod_roles(ctx):
-    """Удалить ВСЕ модераторские роли"""
-    global MOD_ROLE_IDS
-    
-    if not MOD_ROLE_IDS:
-        embed = discord.Embed(
-            title="ℹ️ Нет ролей",
-            description="Список модераторских ролей уже пуст!",
-            color=COLORS['info']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    # Запрашиваем подтверждение
-    embed = discord.Embed(
-        title="⚠️ ОПАСНОЕ ДЕЙСТВИЕ",
-        description=f"Вы уверены, что хотите удалить ВСЕ модераторские роли (**{len(MOD_ROLE_IDS)}** шт.)?",
-        color=COLORS['error']
-    )
-    
-    view = discord.ui.View(timeout=30)
-    
-    async def confirm_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может подтвердить!", ephemeral=True)
-            return
-        
-        old_count = len(MOD_ROLE_IDS)
-        MOD_ROLE_IDS = []
-        
-        # Обновляем .env файл
-        try:
-            env_path = '.env'
-            if os.path.exists(env_path):
-                with open(env_path, 'r') as f:
-                    lines = f.readlines()
-                
-                for i, line in enumerate(lines):
-                    if line.startswith('MOD_ROLE_IDS='):
-                        lines[i] = 'MOD_ROLE_IDS=\n'
-                        break
-                
-                with open(env_path, 'w') as f:
-                    f.writelines(lines)
-                
-                load_dotenv(override=True)
-        except Exception as e:
-            logger.warning(f"Не удалось обновить .env файл: {e}")
-        
-        confirm_embed = discord.Embed(
-            title="✅ Все модераторские роли удалены",
-            description=f"Удалено {old_count} модераторских ролей.",
-            color=COLORS['success']
-        )
-        await interaction.response.edit_message(embed=confirm_embed, view=None)
-    
-    async def cancel_callback(interaction):
-        if interaction.user != ctx.author:
-            await interaction.response.send_message("❌ Только автор команды может отменить!", ephemeral=True)
-            return
-        
-        cancel_embed = discord.Embed(
-            title="❌ Удаление отменено",
-            description="Список модераторских ролей не был изменен.",
-            color=COLORS['warning']
-        )
-        await interaction.response.edit_message(embed=cancel_embed, view=None)
-    
-    confirm_button = discord.ui.Button(label="✅ Подтвердить", style=discord.ButtonStyle.danger)
-    cancel_button = discord.ui.Button(label="❌ Отмена", style=discord.ButtonStyle.secondary)
-    
-    confirm_button.callback = confirm_callback
-    cancel_button.callback = cancel_callback
-    
-    view.add_item(confirm_button)
-    view.add_item(cancel_button)
-    
-    await safe_send(ctx, embed=embed, view=view)
-
-# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
-
-async def safe_send(ctx, content=None, embed=None, file=None, view=None):
-    try:
-        if file:
-            return await ctx.send(content=content, embed=embed, file=file, view=view)
-        else:
-            return await ctx.send(content=content, embed=embed, view=view)
-    except discord.Forbidden:
-        try:
-            await ctx.author.send("❌ У меня нет прав на отправку сообщений в том канале, где вы использовали команду!")
-        except:
-            logger.error(f"Не могу отправить сообщение пользователю {ctx.author}")
-        return None
-    except Exception as e:
-        logger.error(f"Ошибка при отправке сообщения: {e}")
-        return None
-
-async def safe_edit(message, content=None, embed=None, view=None):
-    try:
-        return await message.edit(content=content, embed=embed, view=view)
-    except Exception as e:
-        logger.error(f"Ошибка при редактировании сообщения: {e}")
-        return None
-
-# ========== ОБРАБОТКА ОШИБОК ==========
+# ========== КОМАНДА HELP ==========
 
 @bot.command(name='help')
 async def help_command(ctx):
     """Показать все команды"""
-    # Проверяем, является ли пользователь админом
-    is_user_admin = False
+    # Проверяем, является ли пользователь модератором
+    is_user_mod = False
     try:
-        is_user_admin = ctx.author.guild_permissions.administrator or any(
-            admin_role_id in [role.id for role in ctx.author.roles] 
-            for admin_role_id in ADMIN_ROLE_IDS
-        )
+        if ctx.author.guild_permissions.administrator:
+            is_user_mod = True
+        else:
+            author_role_ids = [role.id for role in ctx.author.roles]
+            mod_role_ids = await db.get_mod_role_ids(ctx.guild.id)
+            if any(mod_role_id in author_role_ids for mod_role_id in mod_role_ids):
+                is_user_mod = True
     except:
         pass
     
@@ -6267,7 +5469,7 @@ async def help_command(ctx):
         color=COLORS['info']
     )
     
-    # Команды для всех пользователей (более короткое описание)
+    # Команды для всех пользователей
     user_commands = (
         f"`{PREFIX}points [@user]` - Проверить поинты\n"
         f"`{PREFIX}leaderboard` - Топ пользователей\n"
@@ -6278,66 +5480,49 @@ async def help_command(ctx):
         f"`{PREFIX}peaceclans` - Нейтральные кланы\n"
         f"`{PREFIX}allclans` - Все кланы\n"
         f"`{PREFIX}claninfo` - Инфо о клане\n"
-        f"`{PREFIX}linkroblox` - Привязать Roblox\n"
-        f"`{PREFIX}myroblox` - Мой Roblox"
+        f"`{PREFIX}searchclan` - Поиск клана\n"
+        f"`{PREFIX}vouchinfo` - Инфо о голосовании\n"
+        f"`{PREFIX}oauth` - Ссылка для проверки серверов"
     )
     embed.add_field(name="👤 Для всех", value=user_commands, inline=False)
     
-    if is_user_admin:
-        # Поинты (админ)
+    if is_user_mod:
+        # Поинты (модератор)
         points_commands = (
             f"`{PREFIX}addpoints @user кол-во [причина]` - Выдать поинты\n"
             f"`{PREFIX}removepoints @user кол-во [причина]` - Забрать поинты\n"
             f"`{PREFIX}setpoints @user кол-во [причина]` - Установить поинты\n"
-            f"`{PREFIX}addpoints_multi кол-во @user1 @user2...` - Массовая выдача\n"
-            f"`{PREFIX}resetpoints` - Сброс ВСЕХ поинтов"
+            f"`{PREFIX}resetpoints` - Сброс ВСЕХ поинтов\n"
+            f"`{PREFIX}export` - Экспорт в CSV"
         )
-        embed.add_field(name="💰 Поинты (админ)", value=points_commands, inline=False)
+        embed.add_field(name="💰 Поинты (модератор)", value=points_commands, inline=False)
         
-        # Роли за поинты (админ)
+        # Роли за поинты (модератор)
         role_commands = (
             f"`{PREFIX}addrole кол-во \"название\"` - Добавить роль\n"
             f"`{PREFIX}removerole кол-во` - Удалить роль\n"
-            f"`{PREFIX}removerolebyname \"название\"` - Удалить по названию\n"
             f"`{PREFIX}editrole старое_кол-во новое_кол-во [название]` - Изменить\n"
             f"`{PREFIX}setrolecolor кол-во цвет` - Установить цвет\n"
             f"`{PREFIX}reorderroles` - Пересоздать роли\n"
             f"`{PREFIX}updateroles` - Обновить роли у всех\n"
-            f"`{PREFIX}saveroles` - Сохранить конфиг\n"
             f"`{PREFIX}reloadroles` - Загрузить из БД"
         )
-        embed.add_field(name="🎭 Роли за поинты (админ)", value=role_commands, inline=False)
-        
-        # Админские роли
-        admin_role_commands = (
-            f"`{PREFIX}addadminrole @роль` - Добавить админ-роль\n"
-            f"`{PREFIX}removeadminrole @роль` - Удалить админ-роль\n"
-            f"`{PREFIX}listadminroles` - Список админ-ролей\n"
-            f"`{PREFIX}clearadminroles` - Очистить админ-роли"
-        )
-        embed.add_field(name="👑 Админские роли", value=admin_role_commands, inline=False)
+        embed.add_field(name="🎭 Роли за поинты (модератор)", value=role_commands, inline=False)
         
         # Блокировка каналов
         lock_commands = (
-            f"`{PREFIX}addchannel #канал` - Добавить канал\n"
+            f"`{PREFIX}addchannel #канал` - Добавить канал в список\n"
             f"`{PREFIX}removechannel [#канал]` - Удалить канал\n"
             f"`{PREFIX}listchannels` - Список каналов\n"
-            f"`{PREFIX}lockchannels @роль [тип]` - Заблокировать\n"
-            f"`{PREFIX}unlockchannels [@роль]` - Разблокировать\n"
+            f"`{PREFIX}lockrole @роль` - Установить роль для блокировки\n"
+            f"`{PREFIX}lock [тип]` - Заблокировать каналы\n"
+            f"`{PREFIX}unlock` - Разблокировать каналы\n"
+            f"`{PREFIX}currentrole` - Текущая роль\n"
+            f"`{PREFIX}resetrole` - Сбросить роль\n"
             f"`{PREFIX}lockinfo` - Инфо о блокировках\n"
-            f"`{PREFIX}clearlocks` - Очистить блокировки"
+            f"`{PREFIX}clearlocks` - Очистить все блокировки"
         )
         embed.add_field(name="🔒 Блокировка каналов", value=lock_commands, inline=False)
-        
-        # Быстрые команды
-        quick_commands = (
-            f"`{PREFIX}lockrole @роль` - Установить роль\n"
-            f"`{PREFIX}lock [тип]` - Быстрая блокировка\n"
-            f"`{PREFIX}unlock` - Быстрая разблокировка\n"
-            f"`{PREFIX}currentrole` - Текущая роль\n"
-            f"`{PREFIX}resetrole` - Сбросить роль"
-        )
-        embed.add_field(name="⚡ Быстрые команды", value=quick_commands, inline=False)
         
         # Управление кланами
         clan_commands = (
@@ -6351,53 +5536,55 @@ async def help_command(ctx):
         )
         embed.add_field(name="🏰 Управление кланами", value=clan_commands, inline=False)
         
-        # OAuth2
-        oauth_commands = (
-            f"`{PREFIX}oauth` - Ссылка для проверки\n"
-            f"`{PREFIX}checkoauth @user` - Проверить данные\n"
-            f"`{PREFIX}refreshoauth` - Обновить данные"
-        )
-        embed.add_field(name="🔍 OAuth2", value=oauth_commands, inline=False)
-        
-        # Roblox
-        roblox_commands = (
-            f"`{PREFIX}checkroblox username` - Проверить пользователя\n"
-            f"`{PREFIX}checkfriends username` - Проверить друзей\n"
-            f"`{PREFIX}addrobloxtag тег` - Добавить приписку\n"
-            f"`{PREFIX}removerobloxtag тег` - Удалить приписку\n"
-            f"`{PREFIX}listrobloxtags` - Список приписок"
-        )
-        embed.add_field(name="🎮 Roblox (админ)", value=roblox_commands, inline=False)
-        
         # Голосование
         vouch_commands = (
             f"`{PREFIX}vouch @user @роль` - Создать голосование\n"
-            f"`{PREFIX}endvouch` - Завершить голосование\n"
-            f"`{PREFIX}vouchinfo` - Инфо о голосовании"
+            f"`{PREFIX}endvouch` - Завершить голосование"
         )
         embed.add_field(name="🗳️ Голосование", value=vouch_commands, inline=False)
         
-        # Экспорт
-        embed.add_field(name="📊 Экспорт", value=f"`{PREFIX}export` - CSV файл", inline=False)
+        # Верификация
+        verify_commands = (
+            f"`{PREFIX}verifyrole @verify @unverify` - Установить роли\n"
+            f"`{PREFIX}verify @user` - Верифицировать\n"
+            f"`{PREFIX}verifyinfo` - Инфо о настройках\n"
+            f"`{PREFIX}clearverifyroles` - Сбросить настройки"
+        )
+        embed.add_field(name="🔐 Верификация", value=verify_commands, inline=False)
+        
+        # OAuth2
+        oauth_commands = (
+            f"`{PREFIX}checkoauth @user` - Проверить данные\n"
+            f"`{PREFIX}checkoauthfull @user` - Полный список (файл)"
+        )
+        embed.add_field(name="🔍 OAuth2 (модератор)", value=oauth_commands, inline=False)
+        
+        # Веб-панель
+        embed.add_field(
+            name="🌐 Веб-панель управления",
+            value=f"Перейдите по ссылке для настройки бота через веб-интерфейс:\n"
+                  f"http://0.0.0.0:{PORT}/admin",
+            inline=False
+        )
     
-    # Информация о системе (коротко)
-    admin_roles_text = []
-    if ADMIN_ROLE_IDS:
-        for role_id in ADMIN_ROLE_IDS[:3]:
-            role = ctx.guild.get_role(role_id)
-            if role:
-                admin_roles_text.append(f"• {role.mention}")
-        if len(ADMIN_ROLE_IDS) > 3:
-            admin_roles_text.append(f"*... и ещё {len(ADMIN_ROLE_IDS)-3}*")
-    else:
-        admin_roles_text = ["• Не настроены"]
-    
-    role_settings, _ = get_guild_settings(ctx.guild.id)
+    # Информация о системе
+    role_settings, _ = await db.load_role_settings(ctx.guild.id)
     roles_count = len(role_settings)
+    
+    # Получаем модераторские роли
+    mod_role_ids = await db.get_mod_role_ids(ctx.guild.id)
+    mod_roles_text = []
+    for role_id in mod_role_ids[:3]:
+        role = ctx.guild.get_role(role_id)
+        if role:
+            mod_roles_text.append(f"• {role.mention}")
+    if len(mod_role_ids) > 3:
+        mod_roles_text.append(f"*... и ещё {len(mod_role_ids)-3}*")
     
     embed.add_field(
         name="ℹ️ Система",
-        value=f"**Серверов:** {len(bot.guilds)} | **Ролей:** {roles_count}\n" + "\n".join(admin_roles_text),
+        value=f"**Серверов:** {len(bot.guilds)} | **Ролей за поинты:** {roles_count}\n"
+              + ("\n".join(mod_roles_text) if mod_roles_text else "• Модераторские роли не настроены"),
         inline=False
     )
     
@@ -6411,74 +5598,6 @@ async def help_command(ctx):
     
     await safe_send(ctx, embed=embed)
 
-@bot.event
-async def on_command_error(ctx, error):
-    if isinstance(error, commands.CommandNotFound):
-        return
-    
-    if not ctx.channel.permissions_for(ctx.guild.me).send_messages:
-        logger.error(f"Ошибка команды в канале без прав на отправку: {error}")
-        return
-    
-    try:
-        if isinstance(error, commands.CheckFailure):
-            admin_role_ids_str = ', '.join(str(role_id) for role_id in ADMIN_ROLE_IDS) if ADMIN_ROLE_IDS else "не указаны"
-            
-            embed = discord.Embed(
-                title="❌ Недостаточно прав",
-                description=f"Только пользователи с административными правами или ролями с ID: **{admin_role_ids_str}** могут использовать эту команду!",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            
-        elif isinstance(error, commands.MissingRequiredArgument):
-            embed = discord.Embed(
-                title="❌ Не хватает аргументов",
-                description=f"Используйте `{PREFIX}help` для справки по командам",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            
-        elif isinstance(error, commands.BadArgument):
-            embed = discord.Embed(
-                title="❌ Неправильные аргументы",
-                description="Проверьте правильность введенных данных",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            
-        elif isinstance(error, commands.TooManyArguments):
-            embed = discord.Embed(
-                title="❌ Слишком много аргументов",
-                description=f"Используйте `{PREFIX}help` для справки по командам",
-                color=COLORS['error']
-            )
-            await safe_send(ctx, embed=embed)
-            
-        elif isinstance(error, commands.CommandOnCooldown):
-            embed = discord.Embed(
-                title="⏳ Команда на перезарядке",
-                description=f"Попробуйте снова через {error.retry_after:.1f} секунд",
-                color=COLORS['warning']
-            )
-            await safe_send(ctx, embed=embed)
-            
-        else:
-            logger.error(f"Необработанная ошибка команды {ctx.command}: {error}")
-            
-            if isinstance(error, discord.Forbidden):
-                pass
-            else:
-                embed = discord.Embed(
-                    title="❌ Неизвестная ошибка",
-                    description="Произошла неизвестная ошибка. Администратор уже уведомлен.",
-                    color=COLORS['error']
-                )
-                await safe_send(ctx, embed=embed)
-                
-    except Exception as e:
-        logger.error(f"Критическая ошибка в обработчике ошибок: {e}")
-
 # ========== ЗАПУСК БОТА ==========
 
 if __name__ == "__main__":
@@ -6486,10 +5605,10 @@ if __name__ == "__main__":
     logger.info("🚀 ЗАПУСК DISCORD POINTS BOT")
     logger.info("=" * 50)
     logger.info(f"🤖 Префикс команд: {PREFIX}")
-    logger.info(f"👑 Админские роли: {ADMIN_ROLE_IDS}")
+    logger.info(f"👑 Глобальные админские роли: {ADMIN_ROLE_IDS}")
     logger.info(f"🌐 Порт веб-сервера: {PORT}")
     logger.info(f"🗄️  База данных: PostgreSQL")
-    logger.info("🔄 Режим: 24/7 с веб-сервером")
+    logger.info("🔄 Режим: 24/7 с веб-сервером и панелью управления")
     logger.info("=" * 50)
     
     try:
