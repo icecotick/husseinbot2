@@ -34,7 +34,1212 @@ MOD_ROLE_IDS = [int(role_id.strip()) for role_id in os.getenv('MOD_ROLE_IDS', ''
 # Автоматическое определение порта для Render
 PORT = int(os.getenv('PORT', '10000'))
 
-# ========== OAuth2 НАСТРОЙКИ ==========
+# Проверка наличия токена
+if not TOKEN:
+    logger.error("❌ Токен бота не найден! Установите DISCORD_TOKEN в .env файле")
+    exit(1)
+
+# Настройки интентов Discord
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+intents.guilds = True
+
+# Создание бота
+bot = commands.Bot(
+    command_prefix=commands.when_mentioned_or(PREFIX),
+    intents=intents,
+    help_command=None
+)
+
+# Цвета для embed сообщений
+COLORS = {
+    'success': discord.Color.green(),
+    'error': discord.Color.red(),
+    'info': discord.Color.blue(),
+    'warning': discord.Color.orange(),
+    'points': discord.Color.gold(),
+    'admin': discord.Color.purple()
+}
+
+# ========== ГИФКИ ДЛЯ КЛАНОВ ==========
+GIFS = {
+    'ally': 'https://cdn.discordapp.com/attachments/1436012207606595774/1480486064723595324/aniyuki-gojo-satoru-gif-23.gif?ex=69afd997&is=69ae8817&hm=d5392f0643225fb1391075e829b488e69db9386b9cfed8479ce4b48ae3cb2220&',
+    'enemy': 'https://cdn.discordapp.com/attachments/1436012207606595774/1480496324179787857/jujutsu-kaisen-shibuya-arc-sukuna-domain-expansion.gif?ex=69afe325&is=69ae91a5&hm=cdfb1840b17659a4ddb9e5906c50a0217bd09e18f8b8feece11c20184b1971fc&',
+    'peace': 'https://cdn.discordapp.com/attachments/1460973139474382879/1461410738697670687/razdelitelnaya-liniya-animatsionnaya-kartinka-0281.gif?ex=69a7c20f&is=69a6708f&hm=ed0667030f415d7adf07ba5b81b075a0ef8b9b192ebf119d9d39d8d479a69acc&'
+}
+
+# ========== СПИСКИ СЕРВЕРОВ ==========
+ENEMY_SERVERS = {
+    "Название вражеского сервера 1": 123456789012345678,
+    "Название вражеского сервера 2": 123456789012345679,
+}
+
+ALLY_SERVERS = {
+    "Fantom Destroyers": 1319658857831858317,
+    "Aesar": 1462191913435402342,
+    "Exasperation": 1445074595685076994,
+    "Reborn The Fallen Fantoms": 1453345739034853490,
+    "BRSQ | Barrio Squad": 759339854613315655,
+    "KRISSIS": 1466433357201276961
+}
+
+NEUTRAL_SERVERS = {
+    "Moon Light": 1439693734475464918,
+}
+
+ALL_TRACKED_SERVERS = {}
+ALL_TRACKED_SERVERS.update(ENEMY_SERVERS)
+ALL_TRACKED_SERVERS.update(ALLY_SERVERS)
+ALL_TRACKED_SERVERS.update(NEUTRAL_SERVERS)
+
+# ========== ROBLOX НАСТРОЙКИ ==========
+ENEMY_ROBLOX_TAGS = ["VXRS", "VQS"]
+
+# Настройки ролей для каждого сервера
+GUILD_ROLE_SETTINGS = {}
+GUILD_ROLE_COLORS = {}
+
+# Стандартные настройки для новых серверов
+DEFAULT_ROLE_SETTINGS = {
+    200: 'raider newgen',
+    400: 'raider scout', 
+    800: 'raider striker', 
+    1200: 'raider heavy', 
+    1600: 'raider legend',
+    2400: 'raider who lives on raids', 
+    3200: 'raid moderator', 
+    4000: 'raider commander'
+}
+
+DEFAULT_ROLE_COLORS = {
+    'raider newgen': discord.Color.green(),
+    'raider scout': discord.Color.blue(),
+    'raider striker': discord.Color.orange(),
+    'raider heavy': discord.Color.yellow(),
+    'raider legend': discord.Color.purple(),
+    'raider who lives on raids': discord.Color.blue(),
+    'raid moderator': discord.Color.red(),
+    'raider commander': discord.Color.gold()
+}
+
+# ========== БАЗА ДАННЫХ ==========
+
+class Database:
+    def __init__(self):
+        self.pool = None
+    
+    async def connect(self):
+        try:
+            self.pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=10)
+            await self.init_tables()
+            logger.info("✅ Подключено к базе данных")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка подключения к БД: {e}")
+            return False
+    
+    async def init_tables(self):
+        async with self.pool.acquire() as conn:
+            # Глобальные настройки сервера (lockrole, verifyrole)
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS guild_settings (
+                    guild_id BIGINT PRIMARY KEY,
+                    lock_role_id BIGINT,
+                    verify_role_id BIGINT,
+                    unverify_role_id BIGINT
+                )
+            ''')
+            
+            # Таблица пользователей
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    user_id BIGINT,
+                    guild_id BIGINT,
+                    points INTEGER DEFAULT 0,
+                    PRIMARY KEY (user_id, guild_id)
+                )
+            ''')
+            
+            # Таблица транзакций
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT,
+                    guild_id BIGINT,
+                    amount INTEGER,
+                    admin_id BIGINT,
+                    reason TEXT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # Таблица блокировок каналов
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS locked_channels (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT,
+                    channel_id BIGINT,
+                    role_id BIGINT,
+                    lock_type TEXT,
+                    created_by BIGINT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(guild_id, channel_id, role_id)
+                )
+            ''')
+            
+            # Таблица каналов для блокировки
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS channel_list (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT,
+                    channel_id BIGINT,
+                    channel_name TEXT,
+                    added_by BIGINT,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(guild_id, channel_id)
+                )
+            ''')
+            
+            # Таблица для хранения настроек ролей за поинты
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS role_settings (
+                    guild_id BIGINT,
+                    points INTEGER,
+                    role_name TEXT,
+                    role_color TEXT,
+                    PRIMARY KEY (guild_id, points)
+                )
+            ''')
+            
+            # Таблица для ручного добавления врагов
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS manual_enemies (
+                    user_id BIGINT,
+                    guild_id BIGINT,
+                    username TEXT,
+                    server_name TEXT,
+                    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    detected_by BIGINT,
+                    reason TEXT,
+                    PRIMARY KEY (user_id, guild_id)
+                )
+            ''')
+            
+            # Таблица для связи Discord и Roblox
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS roblox_links (
+                    discord_id BIGINT PRIMARY KEY,
+                    roblox_id BIGINT,
+                    roblox_username TEXT,
+                    linked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_checked TIMESTAMP
+                )
+            ''')
+            
+            logger.info("✅ Все таблицы инициализированы")
+    
+    # ========== МЕТОДЫ НАСТРОЕК СЕРВЕРА (Guild Settings) ==========
+    
+    async def set_lock_role(self, guild_id: int, role_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO guild_settings (guild_id, lock_role_id)
+                VALUES ($1, $2)
+                ON CONFLICT (guild_id) DO UPDATE SET lock_role_id = EXCLUDED.lock_role_id
+            ''', guild_id, role_id)
+
+    async def get_lock_role(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            return await conn.fetchval('SELECT lock_role_id FROM guild_settings WHERE guild_id = $1', guild_id)
+
+    async def clear_lock_role(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute('UPDATE guild_settings SET lock_role_id = NULL WHERE guild_id = $1', guild_id)
+
+    async def set_verify_roles(self, guild_id: int, verify_id: int, unverify_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO guild_settings (guild_id, verify_role_id, unverify_role_id)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (guild_id) DO UPDATE SET
+                    verify_role_id = EXCLUDED.verify_role_id,
+                    unverify_role_id = EXCLUDED.unverify_role_id
+            ''', guild_id, verify_id, unverify_id)
+
+    async def get_verify_roles(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow('SELECT verify_role_id, unverify_role_id FROM guild_settings WHERE guild_id = $1', guild_id)
+
+    async def clear_verify_roles(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute('UPDATE guild_settings SET verify_role_id = NULL, unverify_role_id = NULL WHERE guild_id = $1', guild_id)
+
+    # ========== ОСТАЛЬНЫЕ МЕТОДЫ ==========
+
+    async def get_user_points(self, user_id: int, guild_id: int) -> int:
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow(
+                'SELECT points FROM users WHERE user_id = $1 AND guild_id = $2',
+                user_id, guild_id
+            )
+            return result['points'] if result else 0
+    
+    async def add_points(self, user_id: int, guild_id: int, amount: int, admin_id: int, reason: str = "Выдано админом"):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO users (user_id, guild_id, points)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, guild_id) 
+                DO UPDATE SET points = users.points + EXCLUDED.points
+            ''', user_id, guild_id, amount)
+            
+            await conn.execute('''
+                INSERT INTO transactions (user_id, guild_id, amount, admin_id, reason)
+                VALUES ($1, $2, $3, $4, $5)
+            ''', user_id, guild_id, amount, admin_id, reason)
+            
+            return await self.get_user_points(user_id, guild_id)
+    
+    async def remove_points(self, user_id: int, guild_id: int, amount: int, admin_id: int, reason: str = "Изъято админом"):
+        async with self.pool.acquire() as conn:
+            current = await self.get_user_points(user_id, guild_id)
+            new_amount = max(0, current - amount)
+            
+            await conn.execute('''
+                UPDATE users SET points = $1 
+                WHERE user_id = $2 AND guild_id = $3
+            ''', new_amount, user_id, guild_id)
+            
+            await conn.execute('''
+                INSERT INTO transactions (user_id, guild_id, amount, admin_id, reason)
+                VALUES ($1, $2, $3, $4, $5)
+            ''', user_id, guild_id, -amount, admin_id, reason)
+            
+            return new_amount
+    
+    async def set_points(self, user_id: int, guild_id: int, amount: int, admin_id: int, reason: str = "Установлено админом"):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO users (user_id, guild_id, points)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (user_id, guild_id) 
+                DO UPDATE SET points = EXCLUDED.points
+            ''', user_id, guild_id, amount)
+            
+            current_points = await self.get_user_points(user_id, guild_id)
+            difference = amount - current_points
+            await conn.execute('''
+                INSERT INTO transactions (user_id, guild_id, amount, admin_id, reason)
+                VALUES ($1, $2, $3, $4, $5)
+            ''', user_id, guild_id, difference, admin_id, reason)
+            
+            return amount
+    
+    async def get_leaderboard(self, guild_id: int, limit: int = 10):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT user_id, points FROM users 
+                WHERE guild_id = $1 AND points > 0
+                ORDER BY points DESC 
+                LIMIT $2
+            ''', guild_id, limit)
+    
+    async def get_user_position(self, user_id: int, guild_id: int) -> int:
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow('''
+                SELECT COUNT(*) as position FROM users 
+                WHERE guild_id = $1 AND points > (
+                    SELECT COALESCE(points, 0) FROM users 
+                    WHERE user_id = $2 AND guild_id = $1
+                )
+            ''', guild_id, user_id)
+            return result['position'] + 1 if result else 1
+    
+    async def get_guild_stats(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            stats = await conn.fetchrow('''
+                SELECT 
+                    COUNT(*) as total_users,
+                    SUM(points) as total_points,
+                    AVG(points) as avg_points,
+                    MAX(points) as max_points
+                FROM users 
+                WHERE guild_id = $1
+            ''', guild_id)
+            
+            return {
+                'total_users': stats['total_users'] or 0,
+                'total_points': stats['total_points'] or 0,
+                'avg_points': round(stats['avg_points'] or 0, 1),
+                'max_points': stats['max_points'] or 0
+            }
+    
+    async def reset_guild_points(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute('DELETE FROM users WHERE guild_id = $1', guild_id)
+            await conn.execute('DELETE FROM transactions WHERE guild_id = $1', guild_id)
+    
+    async def add_channel_to_list(self, guild_id: int, channel_id: int, channel_name: str, added_by: int):
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    INSERT INTO channel_list (guild_id, channel_id, channel_name, added_by)
+                    VALUES ($1, $2, $3, $4)
+                    ON CONFLICT (guild_id, channel_id) 
+                    DO UPDATE SET channel_name = EXCLUDED.channel_name
+                ''', guild_id, channel_id, channel_name, added_by)
+                return True
+            except Exception as e:
+                logger.error(f"Ошибка добавления канала: {e}")
+                return False
+    
+    async def remove_channel_from_list(self, guild_id: int, channel_id: int = None):
+        async with self.pool.acquire() as conn:
+            try:
+                if channel_id:
+                    await conn.execute(
+                        'DELETE FROM channel_list WHERE guild_id = $1 AND channel_id = $2',
+                        guild_id, channel_id
+                    )
+                else:
+                    await conn.execute(
+                        'DELETE FROM channel_list WHERE guild_id = $1',
+                        guild_id
+                    )
+                return True
+            except Exception as e:
+                logger.error(f"Ошибка удаления канала: {e}")
+                return False
+    
+    async def get_channel_list(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch(
+                'SELECT * FROM channel_list WHERE guild_id = $1 ORDER BY added_at',
+                guild_id
+            )
+    
+    async def get_channel_count(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            result = await conn.fetchrow(
+                'SELECT COUNT(*) as count FROM channel_list WHERE guild_id = $1',
+                guild_id
+            )
+            return result['count'] if result else 0
+    
+    async def add_channel_lock(self, guild_id: int, channel_id: int, role_id: int, lock_type: str, created_by: int):
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    INSERT INTO locked_channels (guild_id, channel_id, role_id, lock_type, created_by)
+                    VALUES ($1, $2, $3, $4, $5)
+                    ON CONFLICT (guild_id, channel_id, role_id) 
+                    DO UPDATE SET lock_type = EXCLUDED.lock_type
+                ''', guild_id, channel_id, role_id, lock_type, created_by)
+                return True
+            except Exception as e:
+                logger.error(f"Ошибка добавления блокировки: {e}")
+                return False
+    
+    async def remove_channel_lock(self, guild_id: int, channel_id: int, role_id: int = None):
+        async with self.pool.acquire() as conn:
+            try:
+                if role_id:
+                    await conn.execute(
+                        'DELETE FROM locked_channels WHERE guild_id = $1 AND channel_id = $2 AND role_id = $3',
+                        guild_id, channel_id, role_id
+                    )
+                else:
+                    await conn.execute(
+                        'DELETE FROM locked_channels WHERE guild_id = $1 AND channel_id = $2',
+                        guild_id, channel_id
+                    )
+                return True
+            except Exception as e:
+                logger.error(f"Ошибка удаления блокировки: {e}")
+                return False
+    
+    async def get_channel_locks(self, guild_id: int, channel_id: int = None):
+        async with self.pool.acquire() as conn:
+            if channel_id:
+                return await conn.fetch(
+                    'SELECT * FROM locked_channels WHERE guild_id = $1 AND channel_id = $2',
+                    guild_id, channel_id
+                )
+            else:
+                return await conn.fetch(
+                    'SELECT * FROM locked_channels WHERE guild_id = $1',
+                    guild_id
+                )
+    
+    async def clear_all_locks(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute('DELETE FROM locked_channels WHERE guild_id = $1', guild_id)
+    
+    async def save_role_settings(self, guild_id: int, role_settings: dict, role_colors: dict):
+        async with self.pool.acquire() as conn:
+            await conn.execute('DELETE FROM role_settings WHERE guild_id = $1', guild_id)
+            
+            for points, role_name in role_settings.items():
+                color = str(role_colors.get(role_name, discord.Color.default()))
+                await conn.execute(
+                    'INSERT INTO role_settings (guild_id, points, role_name, role_color) VALUES ($1, $2, $3, $4)',
+                    guild_id, points, role_name, color
+                )
+            logger.info(f"✅ Настройки ролей сохранены для сервера {guild_id}")
+    
+    async def load_role_settings(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            rows = await conn.fetch(
+                'SELECT points, role_name, role_color FROM role_settings WHERE guild_id = $1 ORDER BY points',
+                guild_id
+            )
+            
+            role_settings = {}
+            role_colors = {}
+            
+            for row in rows:
+                role_settings[row['points']] = row['role_name']
+                role_colors[row['role_name']] = row['role_color']
+            
+            return role_settings, role_colors
+    
+    async def link_roblox(self, discord_id: int, roblox_id: int, roblox_username: str):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                INSERT INTO roblox_links (discord_id, roblox_id, roblox_username, last_checked)
+                VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+                ON CONFLICT (discord_id) DO UPDATE 
+                SET roblox_id = EXCLUDED.roblox_id,
+                    roblox_username = EXCLUDED.roblox_username,
+                    last_checked = CURRENT_TIMESTAMP
+            ''', discord_id, roblox_id, roblox_username)
+    
+    async def get_roblox_link(self, discord_id: int):
+        async with self.pool.acquire() as conn:
+            return await conn.fetchrow('SELECT * FROM roblox_links WHERE discord_id = $1', discord_id)
+
+# ========== ROBLOX ФУНКЦИИ ==========
+
+async def check_roblox_username(username: str):
+    if not username:
+        return False, None
+    username_lower = username.lower()
+    for tag in ENEMY_ROBLOX_TAGS:
+        if tag.lower() in username_lower:
+            return True, tag
+    return False, None
+
+async def get_roblox_user_id(username: str):
+    if not username:
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://users.roblox.com/v1/usernames/users",
+                json={"usernames": [username], "excludeBannedUsers": False}
+            ) as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    if data and 'data' in data and len(data['data']) > 0:
+                        return data['data'][0]['id']
+                return None
+    except Exception as e:
+        logger.error(f"Ошибка получения Roblox ID: {e}")
+        return None
+
+# ========== КЛАСС ДЛЯ УПРАВЛЕНИЯ КЛАНАМИ ==========
+
+class ClanManager:
+    def __init__(self, pool):
+        self.pool = pool
+    
+    async def init_tables(self):
+        async with self.pool.acquire() as conn:
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS clans (
+                    id SERIAL PRIMARY KEY,
+                    guild_id BIGINT,
+                    name TEXT NOT NULL,
+                    tag TEXT,
+                    clan_type TEXT NOT NULL CHECK (clan_type IN ('ally', 'enemy', 'peace')),
+                    description TEXT,
+                    added_by BIGINT,
+                    added_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(guild_id, name, clan_type)
+                )
+            ''')
+            logger.info("✅ Таблицы кланов инициализированы")
+    
+    async def add_clan(self, guild_id: int, name: str, clan_type: str, tag: str = None, description: str = None, added_by: int = None):
+        async with self.pool.acquire() as conn:
+            try:
+                existing = await conn.fetchrow(
+                    'SELECT * FROM clans WHERE guild_id = $1 AND LOWER(name) = LOWER($2) AND clan_type = $3',
+                    guild_id, name, clan_type
+                )
+                if existing:
+                    return False, f"Клан **{name}** уже существует в категории **{self.get_type_name(clan_type)}**"
+                
+                await conn.execute('''
+                    INSERT INTO clans (guild_id, name, tag, clan_type, description, added_by)
+                    VALUES ($1, $2, $3, $4, $5, $6)
+                ''', guild_id, name, tag, clan_type, description, added_by)
+                return True, f"✅ Клан **{name}** добавлен в категорию **{self.get_type_name(clan_type)}**"
+            except Exception as e:
+                logger.error(f"Ошибка добавления клана: {e}")
+                return False, f"❌ Ошибка при добавлении клана: {str(e)[:100]}"
+    
+    async def remove_clan(self, guild_id: int, name: str, clan_type: str = None):
+        async with self.pool.acquire() as conn:
+            try:
+                if clan_type:
+                    result = await conn.execute('''
+                        DELETE FROM clans 
+                        WHERE guild_id = $1 AND LOWER(name) = LOWER($2) AND clan_type = $3
+                    ''', guild_id, name, clan_type)
+                    if result == "DELETE 0":
+                        return False, f"❌ Клан **{name}** не найден"
+                    return True, f"✅ Клан **{name}** удален"
+                else:
+                    result = await conn.execute('DELETE FROM clans WHERE guild_id = $1 AND LOWER(name) = LOWER($2)', guild_id, name)
+                    if result == "DELETE 0":
+                        return False, f"❌ Клан **{name}** не найден"
+                    return True, f"✅ Клан **{name}** удален"
+            except Exception as e:
+                logger.error(f"Ошибка удаления клана: {e}")
+                return False, f"❌ Ошибка при удалении: {str(e)[:100]}"
+    
+    async def get_clans_by_type(self, guild_id: int, clan_type: str):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('SELECT * FROM clans WHERE guild_id = $1 AND clan_type = $2 ORDER BY name', guild_id, clan_type)
+    
+    async def get_all_clans(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT * FROM clans WHERE guild_id = $1
+                ORDER BY CASE clan_type WHEN 'ally' THEN 1 WHEN 'peace' THEN 2 WHEN 'enemy' THEN 3 END, name
+            ''', guild_id)
+    
+    async def get_clan_count(self, guild_id: int, clan_type: str = None):
+        async with self.pool.acquire() as conn:
+            if clan_type:
+                return await conn.fetchval('SELECT COUNT(*) FROM clans WHERE guild_id = $1 AND clan_type = $2', guild_id, clan_type)
+            return await conn.fetchval('SELECT COUNT(*) FROM clans WHERE guild_id = $1', guild_id)
+    
+    async def clear_all_clans(self, guild_id: int):
+        async with self.pool.acquire() as conn:
+            await conn.execute('DELETE FROM clans WHERE guild_id = $1', guild_id)
+    
+    async def search_clan(self, guild_id: int, search_term: str):
+        async with self.pool.acquire() as conn:
+            return await conn.fetch('''
+                SELECT * FROM clans WHERE guild_id = $1 AND LOWER(name) LIKE LOWER($2)
+                ORDER BY CASE clan_type WHEN 'ally' THEN 1 WHEN 'peace' THEN 2 WHEN 'enemy' THEN 3 END, name
+            ''', guild_id, f'%{search_term}%')
+    
+    async def update_clan_description(self, guild_id: int, name: str, clan_type: str, description: str):
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    UPDATE clans SET description = $1
+                    WHERE guild_id = $2 AND LOWER(name) = LOWER($3) AND clan_type = $4
+                ''', description, guild_id, name, clan_type)
+                return True, f"✅ Описание клана **{name}** обновлено"
+            except Exception as e:
+                return False, f"❌ Ошибка: {str(e)[:100]}"
+    
+    async def update_clan_tag(self, guild_id: int, name: str, clan_type: str, tag: str):
+        async with self.pool.acquire() as conn:
+            try:
+                await conn.execute('''
+                    UPDATE clans SET tag = $1
+                    WHERE guild_id = $2 AND LOWER(name) = LOWER($3) AND clan_type = $4
+                ''', tag, guild_id, name, clan_type)
+                return True, f"✅ Тег клана **{name}** обновлен на `[{tag}]`"
+            except Exception as e:
+                return False, f"❌ Ошибка: {str(e)[:100]}"
+    
+    def get_type_name(self, clan_type: str):
+        types = {'ally': '🤝 Союзники', 'enemy': '⚔️ Враги', 'peace': '🕊️ Нейтральные'}
+        return types.get(clan_type, clan_type)
+    
+    def get_type_emoji(self, clan_type: str):
+        emojis = {'ally': '🤝', 'enemy': '⚔️', 'peace': '🕊️'}
+        return emojis.get(clan_type, '📌')
+
+def get_guild_settings(guild_id: int):
+    if guild_id not in GUILD_ROLE_SETTINGS:
+        GUILD_ROLE_SETTINGS[guild_id] = DEFAULT_ROLE_SETTINGS.copy()
+        GUILD_ROLE_COLORS[guild_id] = DEFAULT_ROLE_COLORS.copy()
+    return GUILD_ROLE_SETTINGS[guild_id], GUILD_ROLE_COLORS[guild_id]
+
+# Создаем экземпляры
+db = Database()
+clan_manager = None
+
+# ========== ВЕБ-СЕРВЕР (DASHBOARD) ==========
+
+async def handle_root(request):
+    """Красивая панель управления в стиле JuniperBot"""
+    total_users = sum(g.member_count for g in bot.guilds if g.member_count)
+    db_status = "Подключена" if hasattr(db, 'pool') and db.pool else "Отключена"
+    db_color = "#43b581" if db_status == "Подключена" else "#f04747"
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html lang="ru">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Dashboard | Bot Panel</title>
+        <style>
+            body {{
+                background-color: #36393f;
+                color: #dcddde;
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                margin: 0;
+                padding: 0;
+            }}
+            .navbar {{
+                background-color: #202225;
+                padding: 15px 30px;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            }}
+            .navbar h1 {{
+                margin: 0;
+                color: #fff;
+                font-size: 24px;
+                display: flex;
+                align-items: center;
+                gap: 10px;
+            }}
+            .content {{
+                padding: 40px 20px;
+                max-width: 1200px;
+                margin: 0 auto;
+            }}
+            .card {{
+                background-color: #2f3136;
+                border-radius: 8px;
+                padding: 25px;
+                margin-bottom: 25px;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            }}
+            .card h2 {{
+                margin-top: 0;
+                color: #fff;
+                border-bottom: 1px solid #4f545c;
+                padding-bottom: 15px;
+                font-size: 20px;
+            }}
+            .stats-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+                gap: 20px;
+                margin-top: 20px;
+            }}
+            .stat-box {{
+                background-color: #202225;
+                padding: 25px;
+                border-radius: 8px;
+                text-align: center;
+                border-top: 4px solid #5865F2;
+                transition: transform 0.2s;
+            }}
+            .stat-box:hover {{
+                transform: translateY(-5px);
+            }}
+            .stat-box.db-status {{
+                border-top-color: {db_color};
+            }}
+            .stat-box h3 {{
+                margin: 0;
+                font-size: 36px;
+                color: #fff;
+            }}
+            .stat-box p {{
+                margin: 10px 0 0;
+                color: #8e9297;
+                text-transform: uppercase;
+                font-size: 13px;
+                letter-spacing: 1px;
+                font-weight: bold;
+            }}
+            .btn {{
+                background-color: #5865F2;
+                color: #fff;
+                border: none;
+                padding: 10px 20px;
+                border-radius: 4px;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+                font-weight: bold;
+                transition: background 0.2s;
+            }}
+            .btn:hover {{ background-color: #4752C4; }}
+        </style>
+    </head>
+    <body>
+        <div class="navbar">
+            <h1>🤖 Bot Dashboard</h1>
+            <a href="#" class="btn" onclick="alert('Управление серверами скоро появится!')">Управление</a>
+        </div>
+        
+        <div class="content">
+            <div class="card">
+                <h2>📊 Публичная статистика</h2>
+                <div class="stats-grid">
+                    <div class="stat-box">
+                        <h3>{len(bot.guilds)}</h3>
+                        <p>Серверов</p>
+                    </div>
+                    <div class="stat-box">
+                        <h3>{total_users}</h3>
+                        <p>Пользователей</p>
+                    </div>
+                    <div class="stat-box db-status">
+                        <h3 style="color: {db_color};">{db_status}</h3>
+                        <p>Статус Базы Данных</p>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="card">
+                <h2>💡 Информация</h2>
+                <p style="color: #dcddde; line-height: 1.6;">
+                    Система управления ботом активна. Все настройки ролей (блокировки, верификации и поинты) 
+                    надежно сохраняются в базу данных PostgreSQL. Аутентификация через OAuth2 была отключена 
+                    согласно новым требованиям архитектуры.
+                </p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return web.Response(text=html, content_type='text/html')
+
+async def handle_ping(request):
+    return web.Response(text="pong")
+
+async def handle_health(request):
+    status = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "discord-points-bot",
+        "port": PORT,
+        "bot_ready": bot.is_ready(),
+        "database": "connected" if hasattr(db, 'pool') and db.pool else "connecting"
+    }
+    return web.json_response(status)
+
+async def start_web_server():
+    try:
+        app = web.Application()
+        app.router.add_get('/', handle_root)
+        app.router.add_get('/ping', handle_ping)
+        app.router.add_get('/health', handle_health)
+        
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', PORT)
+        await site.start()
+        
+        logger.info(f"🌐 Веб-сервер запущен на порту {PORT}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ Ошибка запуска веб-сервера: {e}")
+        return False
+
+# ========== ФУНКЦИИ ДЛЯ РАБОТЫ С РОЛЯМИ ==========
+
+def is_admin():
+    async def predicate(ctx):
+        if ctx.author.guild_permissions.administrator:
+            return True
+        author_role_ids = [role.id for role in ctx.author.roles]
+        return any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS)
+    return commands.check(predicate)
+
+def is_mod():
+    async def predicate(ctx):
+        if ctx.author.guild_permissions.administrator:
+            return True
+        author_role_ids = [role.id for role in ctx.author.roles]
+        if any(admin_role_id in author_role_ids for admin_role_id in ADMIN_ROLE_IDS):
+            return True
+        if any(mod_role_id in author_role_ids for mod_role_id in MOD_ROLE_IDS):
+            return True
+        return False
+    return commands.check(predicate)
+
+def is_admin_or_mod():
+    return is_mod()
+
+async def check_and_assign_roles(member: discord.Member):
+    try:
+        guild_id = member.guild.id
+        user_id = member.id
+        role_settings, role_colors = get_guild_settings(guild_id)
+        
+        if not role_settings:
+            return
+        
+        points = await db.get_user_points(user_id, guild_id)
+        target_role_name = None
+        for required_points, role_name in sorted(role_settings.items()):
+            if points >= required_points:
+                target_role_name = role_name
+        
+        if not target_role_name:
+            return
+        
+        discord_role = discord.utils.get(member.guild.roles, name=target_role_name)
+        if discord_role and discord_role in member.roles:
+            return
+        
+        for role_name in role_settings.values():
+            if role_name != target_role_name:
+                old_role = discord.utils.get(member.guild.roles, name=role_name)
+                if old_role and old_role in member.roles:
+                    try:
+                        await member.remove_roles(old_role)
+                    except: pass
+        
+        if not discord_role:
+            try:
+                color = role_colors.get(target_role_name, discord.Color.default())
+                if isinstance(color, str):
+                    try:
+                        if color.startswith('#'): color = discord.Color(int(color[1:], 16))
+                        else: color = discord.Color.default()
+                    except: color = discord.Color.default()
+                
+                discord_role = await member.guild.create_role(
+                    name=target_role_name, color=color, mentionable=True,
+                    reason="Автоматическое создание роли за поинты"
+                )
+            except discord.Forbidden: return
+            except Exception: return
+        
+        try:
+            await member.add_roles(discord_role)
+            await send_role_notification(member, target_role_name, points)
+        except Exception: pass
+            
+    except Exception as e:
+        logger.error(f'Ошибка в check_and_assign_roles: {e}')
+
+async def send_role_notification(member: discord.Member, role_name: str, points: int):
+    try:
+        embed = discord.Embed(
+            title="🎉 Новая роль получена!",
+            description=f"**{member.display_name}** получил(а) новую роль!",
+            color=discord.Color.green()
+        )
+        embed.add_field(name="Роль", value=f"`{role_name}`", inline=True)
+        embed.add_field(name="Поинты", value=f"`{points}`", inline=True)
+        
+        congrats = "Поздравляем с получением новой роли! ✨"
+        if 'newgen' in role_name: congrats = "Добро пожаловать в ряды рейдеров! 🚀"
+        elif 'scout' in role_name: congrats = "Отличная работа! Ты становишься опытным скаутом! 🔍"
+        
+        embed.add_field(name="Поздравления!", value=congrats, inline=False)
+        
+        if member.guild.system_channel:
+            await member.guild.system_channel.send(member.mention, embed=embed)
+        else:
+            try: await member.send(embed=embed)
+            except: pass
+    except Exception as e: pass
+
+# ========== ФУНКЦИИ ДЛЯ БЛОКИРОВКИ КАНАЛОВ ==========
+
+async def apply_channel_lock(channel: discord.TextChannel, role: discord.Role, lock_type: str):
+    try:
+        overwrites = channel.overwrites_for(role)
+        if lock_type == 'send':
+            overwrites.send_messages = False
+            overwrites.add_reactions = False
+            overwrites.attach_files = False
+        elif lock_type == 'view':
+            overwrites.read_messages = False
+            overwrites.send_messages = False
+        elif lock_type == 'both':
+            overwrites.read_messages = False
+            overwrites.send_messages = False
+            overwrites.add_reactions = False
+            overwrites.attach_files = False
+        await channel.set_permissions(role, overwrite=overwrites)
+        return True
+    except Exception: return False
+
+async def remove_channel_lock(channel: discord.TextChannel, role: discord.Role):
+    try:
+        await channel.set_permissions(role, overwrite=None)
+        return True
+    except: return False
+
+async def lock_all_channels_in_list(guild: discord.Guild, role: discord.Role, lock_type: str):
+    try:
+        results = []
+        channels_list = await db.get_channel_list(guild.id)
+        if not channels_list: return ["❌ Список каналов пуст. Добавьте каналы с помощью !addchannel"]
+        for channel_data in channels_list:
+            try:
+                channel = guild.get_channel(channel_data['channel_id'])
+                if channel:
+                    await db.add_channel_lock(guild.id, channel.id, role.id, lock_type, guild.me.id)
+                    success = await apply_channel_lock(channel, role, lock_type)
+                    results.append(f"✅ {channel.mention}" if success else f"⚠️ {channel.mention} - ошибка прав")
+                else:
+                    results.append(f"❌ Канал {channel_data['channel_name']} не найден")
+            except Exception as e:
+                results.append(f"❌ Ошибка: {str(e)[:50]}")
+        return results
+    except Exception as e: return [f"❌ Ошибка: {str(e)[:100]}"]
+
+async def unlock_all_channels_in_list(guild: discord.Guild, role: discord.Role = None):
+    try:
+        results = []
+        channels_list = await db.get_channel_list(guild.id)
+        if not channels_list: return ["❌ Список каналов пуст"]
+        for channel_data in channels_list:
+            try:
+                channel = guild.get_channel(channel_data['channel_id'])
+                if not channel: continue
+                if role:
+                    await db.remove_channel_lock(guild.id, channel.id, role.id)
+                    success = await remove_channel_lock(channel, role)
+                    results.append(f"✅ {channel.mention} - разблокирован" if success else f"⚠️ {channel.mention} - ошибка прав")
+                else:
+                    locks = await db.get_channel_locks(guild.id, channel.id)
+                    for lock in locks:
+                        role_obj = guild.get_role(lock['role_id'])
+                        if role_obj: await remove_channel_lock(channel, role_obj)
+                    await db.remove_channel_lock(guild.id, channel.id)
+                    results.append(f"✅ {channel.mention} - все блокировки сняты")
+            except Exception as e: results.append(f"❌ {channel_data['channel_name']} - ошибка")
+        return results
+    except Exception as e: return [f"❌ Ошибка: {str(e)[:100]}"]
+
+# ========== СОБЫТИЯ БОТА ==========
+
+@bot.event
+async def on_ready():
+    logger.info(f'✅ Бот {bot.user} запущен!')
+    
+    if await db.connect():
+        global clan_manager
+        clan_manager = ClanManager(db.pool)
+        await clan_manager.init_tables()
+        
+        global GUILD_ROLE_SETTINGS, GUILD_ROLE_COLORS
+        for guild in bot.guilds:
+            try:
+                loaded_settings, loaded_colors = await db.load_role_settings(guild.id)
+                if loaded_settings:
+                    GUILD_ROLE_SETTINGS[guild.id] = loaded_settings
+                    colors = {}
+                    for role_name, color_str in loaded_colors.items():
+                        try:
+                            if color_str and color_str.startswith('#'): colors[role_name] = discord.Color(int(color_str[1:], 16))
+                            else: colors[role_name] = discord.Color.default()
+                        except: colors[role_name] = discord.Color.default()
+                    GUILD_ROLE_COLORS[guild.id] = colors
+                else:
+                    GUILD_ROLE_SETTINGS[guild.id] = DEFAULT_ROLE_SETTINGS.copy()
+                    GUILD_ROLE_COLORS[guild.id] = DEFAULT_ROLE_COLORS.copy()
+            except Exception: pass
+    
+    await start_web_server()
+    bot.loop.create_task(check_expired_vouches())
+    await bot.change_presence(activity=discord.Activity(type=discord.ActivityType.watching, name=f"{PREFIX}help | {len(bot.guilds)} серв."))
+
+@bot.event
+async def on_guild_join(guild):
+    GUILD_ROLE_SETTINGS[guild.id] = DEFAULT_ROLE_SETTINGS.copy()
+    GUILD_ROLE_COLORS[guild.id] = DEFAULT_ROLE_COLORS.copy()
+    try: await db.save_role_settings(guild.id, GUILD_ROLE_SETTINGS[guild.id], GUILD_ROLE_COLORS[guild.id])
+    except Exception: pass
+
+# ... (Остальные команды Roblox, Clans, Channels и Points остаются без изменений, так как их логика не зависит от OAuth2 или новых настроек БД)
+# [Примечание: для экономии места здесь предполагается, что вы сохраняете все ваши команды `checkroblox`, `addpoints`, `allyclans`, `vouch` и т.д. из оригинального кода]
+
+# ========== БЫСТРЫЕ КОМАНДЫ ДЛЯ БЛОКИРОВКИ С ИСПОЛЬЗОВАНИЕМ БД ==========
+
+@bot.command(name='lockrole')
+@is_admin_or_mod()
+async def lockrole_command(ctx, role: discord.Role):
+    await db.set_lock_role(ctx.guild.id, role.id)
+    embed = discord.Embed(
+        title="✅ Роль установлена (сохранено в БД)",
+        description=f"Теперь команды `!lock` и `!unlock` работают с ролью {role.mention}",
+        color=COLORS['success']
+    )
+    embed.add_field(name="Как использовать", value=f"• `{PREFIX}lock`\n• `{PREFIX}unlock`", inline=False)
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='unlock')
+@is_admin_or_mod()
+async def unlock_command(ctx):
+    role_id = await db.get_lock_role(ctx.guild.id)
+    if not role_id:
+        await safe_send(ctx, embed=discord.Embed(title="❌ Роль не установлена", description=f"Используйте `{PREFIX}lockrole @роль`", color=COLORS['error']))
+        return
+    
+    target_role = ctx.guild.get_role(role_id)
+    if not target_role:
+        await safe_send(ctx, embed=discord.Embed(title="❌ Роль не найдена", description="Роль больше не существует.", color=COLORS['error']))
+        return
+    
+    message = await safe_send(ctx, embed=discord.Embed(title="🔓 Разблокировка...", color=COLORS['info']))
+    results = await unlock_all_channels_in_list(ctx.guild, target_role)
+    await safe_edit(message, embed=discord.Embed(title="✅ Разблокировка завершена", description=f"Для роли {target_role.mention}", color=COLORS['success']))
+
+@bot.command(name='lock')
+@is_admin_or_mod()
+async def lock_command(ctx, lock_type: str = "send"):
+    role_id = await db.get_lock_role(ctx.guild.id)
+    if not role_id:
+        await safe_send(ctx, embed=discord.Embed(title="❌ Роль не установлена", description=f"Используйте `{PREFIX}lockrole @роль`", color=COLORS['error']))
+        return
+    
+    target_role = ctx.guild.get_role(role_id)
+    if not target_role:
+        await safe_send(ctx, embed=discord.Embed(title="❌ Роль не найдена", description="Роль больше не существует.", color=COLORS['error']))
+        return
+    
+    if lock_type.lower() not in ['send', 'view', 'both']:
+        await safe_send(ctx, embed=discord.Embed(title="❌ Ошибка", description="Типы: send, view, both", color=COLORS['error']))
+        return
+        
+    message = await safe_send(ctx, embed=discord.Embed(title="🔒 Блокировка...", color=COLORS['warning']))
+    results = await lock_all_channels_in_list(ctx.guild, target_role, lock_type.lower())
+    await safe_edit(message, embed=discord.Embed(title="✅ Блокировка завершена", description=f"Для роли {target_role.mention}", color=COLORS['success']))
+
+@bot.command(name='currentrole')
+@is_admin()
+async def current_role_command(ctx):
+    role_id = await db.get_lock_role(ctx.guild.id)
+    if not role_id:
+        await safe_send(ctx, embed=discord.Embed(title="ℹ️ Роль не установлена", color=COLORS['info']))
+        return
+    
+    target_role = ctx.guild.get_role(role_id)
+    embed = discord.Embed(title="🎯 Текущая роль", description=f"Роль для блокировок: {target_role.mention if target_role else 'Не найдена'}", color=COLORS['success'])
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='resetrole')
+@is_admin()
+async def reset_role_command(ctx):
+    await db.clear_lock_role(ctx.guild.id)
+    await safe_send(ctx, embed=discord.Embed(title="✅ Роль сброшена", color=COLORS['success']))
+
+
+# ========== СИСТЕМА ВЕРИФИКАЦИИ РОЛЕЙ С ИСПОЛЬЗОВАНИЕМ БД ==========
+
+@bot.command(name='verifyrole')
+@is_admin()
+async def set_verify_roles(ctx, verify_role: discord.Role, unverify_role: discord.Role):
+    await db.set_verify_roles(ctx.guild.id, verify_role.id, unverify_role.id)
+    embed = discord.Embed(
+        title="✅ Роли верификации сохранены в БД",
+        color=COLORS['success']
+    )
+    embed.add_field(name="Выдаваемая роль", value=verify_role.mention, inline=True)
+    embed.add_field(name="Снимаемая роль", value=unverify_role.mention, inline=True)
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='clearverifyroles')
+@is_admin()
+async def unset_verify_roles(ctx):
+    await db.clear_verify_roles(ctx.guild.id)
+    await safe_send(ctx, embed=discord.Embed(title="✅ Настройки сброшены", color=COLORS['success']))
+
+@bot.command(name='verify')
+@is_admin_or_mod()
+async def verify_user(ctx, member: discord.Member):
+    settings = await db.get_verify_roles(ctx.guild.id)
+    
+    if not settings or not settings['verify_role_id']:
+        await safe_send(ctx, embed=discord.Embed(title="❌ Роли не настроены", description=f"Используйте `{PREFIX}verifyrole`", color=COLORS['error']))
+        return
+    
+    verify_role = ctx.guild.get_role(settings['verify_role_id'])
+    unverify_role = ctx.guild.get_role(settings['unverify_role_id'])
+    
+    if not verify_role or not unverify_role:
+        await safe_send(ctx, embed=discord.Embed(title="❌ Роль не найдена", description="Одна из ролей больше не существует.", color=COLORS['error']))
+        return
+    
+    results, errors = [], []
+    
+    if unverify_role in member.roles:
+        try:
+            await member.remove_roles(unverify_role, reason=f"Верификация ({ctx.author})")
+            results.append(f"✅ Снята роль {unverify_role.mention}")
+        except Exception as e: errors.append(f"❌ Ошибка снятия: {e}")
+            
+    if verify_role not in member.roles:
+        try:
+            await member.add_roles(verify_role, reason=f"Верификация ({ctx.author})")
+            results.append(f"✅ Выдана роль {verify_role.mention}")
+        except Exception as e: errors.append(f"❌ Ошибка выдачи: {e}")
+
+    embed = discord.Embed(title="🔐 Верификация", description=f"Пользователь: {member.mention}", color=COLORS['success'])
+    if results: embed.add_field(name="Результат", value="\n".join(results), inline=False)
+    if errors: embed.add_field(name="Ошибки", value="\n".join(errors), inline=False)
+    await safe_send(ctx, embed=embed)
+
+@bot.command(name='verifyinfo')
+@is_admin_or_mod()
+async def verify_info(ctx):
+    settings = await db.get_verify_roles(ctx.guild.id)
+    if not settings or not settings['verify_role_id']:
+        await safe_send(ctx, embed=discord.Embed(title="ℹ️ Не настроено", color=COLORS['info']))
+        return
+        
+    v_role = ctx.guild.get_role(settings['verify_role_id'])
+    uv_role = ctx.guild.get_role(settings['unverify_role_id'])
+    
+    embed = discord.Embed(title="🔐 Настройки верификации", color=COLORS['info'])
+    embed.add_field(name="Verify роль", value=v_role.mention if v_role else "Не найдена", inline=True)
+    embed.add_field(name="Unverify роль", value=uv_role.mention if uv_role else "Не найдена", inline=True)
+    await safe_send(ctx, embed=embed)
+
+# ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ И ОШИБКИ ==========
+
+async def safe_send(ctx, content=None, embed=None, file=None, view=None):
+    try:
+        if file: return await ctx.send(content=content, embed=embed, file=file, view=view)
+        else: return await ctx.send(content=content, embed=embed, view=view)
+    except Exception as e: logger.error(f"Ошибка при отправке: {e}"); return None
+
+async def safe_edit(message, content=None, embed=None, view=None):
+    try: return await message.edit(content=content, embed=embed, view=view)
+    except Exception as e: return None
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound): return
+    try:
+        if isinstance(error, commands.CheckFailure):
+            await safe_send(ctx, embed=discord.Embed(title="❌ Недостаточно прав", color=COLORS['error']))
+        elif isinstance(error, commands.MissingRequiredArgument):
+            await safe_send(ctx, embed=discord.Embed(title="❌ Не хватает аргументов", color=COLORS['error']))
+    except Exception: pass
+
+# ========== ЗАПУСК БОТА ==========
+
+if __name__ == "__main__":
+    logger.info("🚀 ЗАПУСК БОТА С НОВОЙ БД И ДАШБОРДОМ")
+    try: bot.run(TOKEN)
+    except Exception as e: logger.error(f"❌ Критическая ошибка: {e}")# ========== OAuth2 НАСТРОЙКИ ==========
 CLIENT_ID = os.getenv('CLIENT_ID')
 CLIENT_SECRET = os.getenv('CLIENT_SECRET')
 REDIRECT_URI = f"https://husseinbot2.onrender.com/oauth2/callback"  # Исправлено на ваш URL
