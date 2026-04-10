@@ -3,7 +3,6 @@ from discord.ext import commands
 import os
 import logging
 import asyncpg
-import asyncio
 import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
@@ -35,34 +34,30 @@ class Database:
     async def connect(self):
         self.pool = await asyncpg.create_pool(DATABASE_URL)
         async with self.pool.acquire() as conn:
-            # Основные настройки
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS guild_settings (
                     guild_id BIGINT PRIMARY KEY,
-                    lock_role_id BIGINT,
-                    verify_role_id BIGINT,
-                    unverify_role_id BIGINT,
-                    admin_role_ids TEXT,
-                    blacklist_ids TEXT
+                    lock_role_id BIGINT DEFAULT 0,
+                    verify_role_id BIGINT DEFAULT 0,
+                    mod_role_ids TEXT DEFAULT '',
+                    admin_role_ids TEXT DEFAULT '',
+                    lock_channel_ids TEXT DEFAULT '',
+                    log_channel_id BIGINT DEFAULT 0,
+                    blacklist_ids TEXT DEFAULT ''
                 )
             ''')
-            # Авто-роли за баллы
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS role_rewards (
-                    id SERIAL PRIMARY KEY,
-                    guild_id BIGINT,
-                    role_id BIGINT,
-                    required_points INTEGER
+                    id SERIAL PRIMARY KEY, guild_id BIGINT, role_id BIGINT, required_points INTEGER
                 )
             ''')
-            # Пользователи и баллы
             await conn.execute('''
                 CREATE TABLE IF NOT EXISTS users (
                     user_id BIGINT, guild_id BIGINT, points INTEGER DEFAULT 0,
                     PRIMARY KEY (user_id, guild_id)
                 )
             ''')
-        logger.info("✅ База данных PostgreSQL подключена")
+        logger.info("✅ База данных подключена")
 
     async def get_settings(self, guild_id):
         async with self.pool.acquire() as conn:
@@ -80,52 +75,161 @@ class Database:
             '''
             await conn.execute(query, guild_id, *values)
 
-    async def add_points(self, user_id, guild_id, amount):
-        async with self.pool.acquire() as conn:
-            row = await conn.fetchrow('''
-                INSERT INTO users (user_id, guild_id, points) VALUES ($1, $2, $3)
-                ON CONFLICT (user_id, guild_id) DO UPDATE SET points = users.points + $3
-                RETURNING points
-            ''', user_id, guild_id, amount)
-            return row['points']
-
 db = Database()
 
-# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
-async def check_auto_roles(member, current_points):
-    """Проверяет и выдает роли, если набрано нужное кол-во баллов"""
-    async with db.pool.acquire() as conn:
-        rewards = await conn.fetch('SELECT role_id, required_points FROM role_rewards WHERE guild_id = $1', member.guild.id)
+# --- ПРОВЕРКА ПРАВ ---
+def check_permissions(member, s, p_type="mod"):
+    if member.guild_permissions.administrator: return True
+    if not s: return False
     
-    for reward in rewards:
-        if current_points >= reward['required_points']:
-            role = member.guild.get_role(reward['role_id'])
-            if role and role not in member.roles:
-                try:
-                    await member.add_roles(role, reason="Авто-роль за поинты")
-                    logger.info(f"Авто-выдача: {role.name} выдана {member.name}")
-                except:
-                    pass
+    # Ищем ID ролей в строке из БД
+    target_ids = s['admin_role_ids'] if p_type == "admin" else s.get('mod_role_ids', '')
+    if not target_ids: return False
+    
+    user_role_ids = [str(r.id) for r in member.roles]
+    return any(rid.strip() in target_ids.split(',') for rid in user_role_ids)
 
-# --- ВЕБ-ИНТЕРФЕЙС (DASHBOARD) ---
+# --- ВЕБ-ИНТЕРФЕЙС ---
 HTML_STYLE = """
 <style>
-    body { background: #36393f; color: #dcddde; font-family: 'Segoe UI', sans-serif; margin: 0; padding: 20px; }
-    .container { max-width: 800px; margin: auto; }
-    .card { background: #2f3136; padding: 25px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }
-    h2, h3 { color: #fff; margin-top: 0; }
-    input, select, textarea { width: 100%; padding: 10px; margin: 10px 0; background: #40444b; color: #fff; border: 1px solid #202225; border-radius: 4px; }
-    .btn { background: #5865f2; color: #fff; border: none; padding: 12px 20px; border-radius: 4px; cursor: pointer; text-decoration: none; display: inline-block; font-weight: bold; }
+    body { background: #36393f; color: #dcddde; font-family: 'Segoe UI', sans-serif; padding: 20px; }
+    .card { background: #2f3136; padding: 25px; border-radius: 10px; max-width: 800px; margin: auto; box-shadow: 0 8px 16px rgba(0,0,0,0.3); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    h2, h3 { color: #fff; border-bottom: 1px solid #4f545c; padding-bottom: 8px; }
+    label { font-size: 0.85em; font-weight: bold; display: block; margin-top: 10px; color: #b9bbbe; }
+    input, select, textarea { width: 100%; padding: 10px; margin-top: 5px; background: #40444b; color: #fff; border: 1px solid #202225; border-radius: 4px; }
+    .btn { background: #5865f2; color: #fff; border: none; padding: 12px; border-radius: 4px; cursor: pointer; width: 100%; font-weight: bold; margin-top: 15px; }
     .btn:hover { background: #4752c4; }
-    .reward-item { background: #40444b; padding: 10px; border-radius: 4px; margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center; }
-    .server-card { background: #2f3136; border-radius: 8px; padding: 15px; margin: 10px; display: inline-block; width: 180px; text-align: center; }
-    .server-card img { border-radius: 50%; width: 64px; }
+    .footer { text-align: center; margin-top: 20px; font-size: 0.8em; color: #72767d; }
 </style>
 """
 
+async def handle_manage(request):
+    guild_id = int(request.match_info['guild_id'])
+    guild = bot.get_guild(guild_id)
+    if not guild: return web.Response(text="Бот не на сервере!")
+    
+    s = await db.get_settings(guild_id) or {}
+    
+    # Генерация списков
+    roles_opt = "".join([f"<option value='{r.id}' {'selected' if s.get('lock_role_id')==r.id else ''}>{r.name}</option>" for r in sorted(guild.roles, reverse=True) if not r.is_default()])
+    roles_opt_v = "".join([f"<option value='{r.id}' {'selected' if s.get('verify_role_id')==r.id else ''}>{r.name}</option>" for r in sorted(guild.roles, reverse=True) if not r.is_default()])
+    log_chan_opt = "".join([f"<option value='{c.id}' {'selected' if s.get('log_channel_id')==c.id else ''}>#{c.name}</option>" for c in guild.text_channels])
+
+    html = f"""{HTML_STYLE}<body><div class='container'><div class='card'>
+    <h2>🛡️ Настройки {guild.name}</h2>
+    <form action="/save/{guild_id}" method="post">
+        <div class="grid">
+            <div>
+                <h3>🎭 Основные роли</h3>
+                <label>Роль блокировки (!lock):</label>
+                <select name="lock_role_id"><option value="0">Не выбрано</option>{roles_opt}</select>
+                <label>Роль верификации:</label>
+                <select name="verify_role_id"><option value="0">Не выбрано</option>{roles_opt_v}</select>
+            </div>
+            <div>
+                <h3>🔑 Права (ID ролей через запятую)</h3>
+                <label>Модераторы:</label>
+                <input type="text" name="mod_role_ids" value="{s.get('mod_role_ids', '')}">
+                <label>Администраторы:</label>
+                <input type="text" name="admin_role_ids" value="{s.get('admin_role_ids', '')}">
+            </div>
+        </div>
+
+        <h3>📝 Каналы и Логирование</h3>
+        <label>Каналы для блокировки (ID через запятую):</label>
+        <input type="text" name="lock_channel_ids" value="{s.get('lock_channel_ids', '')}" placeholder="ID1, ID2, ID3">
+        
+        <label>Канал для логов Черного списка:</label>
+        <select name="log_channel_id"><option value="0">Не выбрано</option>{log_chan_opt}</select>
+
+        <h3>🚫 Черный список</h3>
+        <label>ID пользователей (через запятую):</label>
+        <textarea name="blacklist_ids" rows="3">{s.get('blacklist_ids', '')}</textarea>
+
+        <button type="submit" class="btn">💾 Сохранить изменения</button>
+    </form>
+    </div><div class='footer'><a href="/servers" style="color:inherit;">← Назад к списку серверов</a></div></div></body>"""
+    return web.Response(text=html, content_type='text/html')
+
+async def handle_save(request):
+    guild_id = int(request.match_info['guild_id'])
+    data = await request.post()
+    
+    def to_int(val):
+        return int(val) if val and val.isdigit() else 0
+
+    old_s = await db.get_settings(guild_id) or {}
+    new_bl = data.get('blacklist_ids', '')
+
+    await db.save_settings(guild_id,
+        lock_role_id=to_int(data.get('lock_role_id')),
+        verify_role_id=to_int(data.get('verify_role_id')),
+        mod_role_ids=data.get('mod_role_ids', ''),
+        admin_role_ids=data.get('admin_role_ids', ''),
+        lock_channel_ids=data.get('lock_channel_ids', ''),
+        log_channel_id=to_int(data.get('log_channel_id')),
+        blacklist_ids=new_bl
+    )
+
+    # Логирование изменения блеклиста
+    if new_bl != old_s.get('blacklist_ids', ''):
+        log_id = to_int(data.get('log_channel_id'))
+        if log_id:
+            chan = bot.get_channel(log_id)
+            if chan:
+                await chan.send(f"🛰️ **Обновление черного списка в панели:**\nНовые ID: `{new_bl if new_bl else 'Список пуст'}`")
+
+    return web.HTTPFound(f'/manage/{guild_id}')
+
+# --- КОМАНДЫ БОТА ---
+
+@bot.command()
+async def lock(ctx):
+    s = await db.get_settings(ctx.guild.id)
+    if not check_permissions(ctx.author, s, "mod"): return await ctx.send("❌ У вас нет прав модератора.")
+    
+    role = ctx.guild.get_role(s['lock_role_id'])
+    if not role: return await ctx.send("❌ Роль для блокировки не настроена.")
+
+    c_ids = s.get('lock_channel_ids', '').split(',')
+    targets = [ctx.guild.get_channel(int(i.strip())) for i in c_ids if i.strip().isdigit()]
+    if not targets: targets = [ctx.channel]
+
+    for ch in targets:
+        if ch: await ch.set_permissions(role, send_messages=False)
+    await ctx.send(f"🔒 Закрыт доступ к {len(targets)} кан. для {role.name}")
+
+@bot.command()
+async def verify(ctx, member: discord.Member):
+    s = await db.get_settings(ctx.guild.id)
+    if not check_permissions(ctx.author, s, "mod"): return
+    
+    role = ctx.guild.get_role(s['verify_role_id'])
+    if role:
+        await member.add_roles(role)
+        await ctx.send(f"✅ {member.mention} верифицирован.")
+
+@bot.command()
+async def addpoints(ctx, member: discord.Member, amount: int):
+    s = await db.get_settings(ctx.guild.id)
+    if not check_permissions(ctx.author, s, "admin"): return await ctx.send("❌ Только для администраторов.")
+    
+    new_pts = await db.add_points(member.id, ctx.guild.id, amount)
+    await ctx.send(f"💰 {member.mention}: +{amount} баллов (Всего: {new_pts})")
+
+@bot.command()
+async def help(ctx):
+    embed = discord.Embed(title="Команды бота", color=0x5865f2)
+    embed.add_field(name="🛡️ Модерация", value="`!lock`, `!unlock`, `!verify`", inline=False)
+    embed.add_field(name="👑 Админ", value="`!addpoints`, `!removepoints`", inline=False)
+    embed.description = f"🔗 [Панель управления]({REDIRECT_URI.replace('/oauth2/callback', '')})"
+    await ctx.send(embed=embed)
+
+# --- ВСЕ ОСТАЛЬНЫЕ РОУТЫ (Home, Callback, Servers) ---
 async def handle_home(request):
     login_url = f"https://discord.com/api/oauth2/authorize?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI.replace(':', '%3A').replace('/', '%2F')}&response_type=code&scope=identify%20guilds"
-    return web.Response(text=f"{HTML_STYLE}<body><div style='text-align:center; padding-top:100px;'><h1>🤖 Бот Панель</h1><a href='{login_url}' class='btn'>Войти через Discord</a></div></body>", content_type='text/html')
+    return web.Response(text=f"{HTML_STYLE}<body style='text-align:center; padding-top:100px;'><h1>Robot Dashboard</h1><a href='{login_url}' class='btn' style='width:200px;'>Войти</a></body>", content_type='text/html')
 
 async def handle_callback(request):
     code = request.query.get('code')
@@ -134,9 +238,9 @@ async def handle_callback(request):
         async with session.post('https://discord.com/api/oauth2/token', data=data) as resp:
             token_data = await resp.json()
             access_token = token_data.get('access_token')
-    response = web.HTTPFound('/servers')
-    response.set_cookie('access_token', access_token, max_age=3600)
-    return response
+    res = web.HTTPFound('/servers')
+    res.set_cookie('access_token', access_token, max_age=3600)
+    return res
 
 async def handle_servers(request):
     token = request.cookies.get('access_token')
@@ -144,150 +248,33 @@ async def handle_servers(request):
     async with aiohttp.ClientSession() as session:
         async with session.get('https://discord.com/api/users/@me/guilds', headers={'Authorization': f'Bearer {token}'}) as resp:
             guilds = await resp.json()
-    
-    html = f"{HTML_STYLE}<body><div class='container'><h1>Выберите сервер</h1>"
+    html = f"{HTML_STYLE}<body><div class='card'><h2>Ваши серверы</h2>"
     for g in guilds:
-        perms = int(g.get('permissions', 0))
-        if (perms & 0x8) or (perms & 0x20):
-            icon = f"https://cdn.discordapp.com/icons/{g['id']}/{g['icon']}.png" if g['icon'] else "https://discord.com/assets/1f0ac534f30559f21f1d1e4e511394b8.svg"
-            html += f"<div class='server-card'><img src='{icon}'><br><br><b>{g['name']}</b><br><br><a href='/manage/{g['id']}' class='btn'>Настроить</a></div>"
+        if (int(g.get('permissions', 0)) & 0x8) or (int(g.get('permissions', 0)) & 0x20):
+            html += f"<p>• {g['name']} <a href='/manage/{g['id']}' style='color:#5865f2; float:right;'>Настроить</a></p>"
     html += "</div></body>"
     return web.Response(text=html, content_type='text/html')
 
-async def handle_manage(request):
-    guild_id = int(request.match_info['guild_id'])
-    guild = bot.get_guild(guild_id)
-    if not guild: return web.Response(text="Бот не на сервере. Сначала добавьте его!")
-    
-    s = await db.get_settings(guild_id) or {}
-    async with db.pool.acquire() as conn:
-        rewards = await conn.fetch('SELECT * FROM role_rewards WHERE guild_id = $1 ORDER BY required_points ASC', guild_id)
-    
-    roles_opt = "".join([f"<option value='{r.id}'>{r.name}</option>" for r in sorted(guild.roles, reverse=True) if not r.is_default()])
-    rewards_html = "".join([f"<div class='reward-item'><span>{guild.get_role(r['role_id']).name if guild.get_role(r['role_id']) else 'Удалена'} — <b>{r['required_points']}</b> поинтов</span> <a href='/del_reward/{guild_id}/{r['id']}' style='color:#ed4245; text-decoration:none;'>Удалить</a></div>" for r in rewards])
-
-    html = f"""{HTML_STYLE}<body><div class='container'>
-    <div class='card'>
-        <h2>⚙️ Настройки {guild.name}</h2>
-        <form action="/save/{guild_id}" method="post">
-            <label>Роль блокировки (!lock):</label>
-            <select name="lock_role_id"><option value="0">Не выбрано</option>{roles_opt.replace(f"value='{s.get('lock_role_id')}'", f"selected value='{s.get('lock_role_id')}'")}</select>
-            
-            <label>Роль верификации (!verify):</label>
-            <select name="verify_role_id"><option value="0">Не выбрано</option>{roles_opt.replace(f"value='{s.get('verify_role_id')}'", f"selected value='{s.get('verify_role_id')}'")}</select>
-            
-            <label>Черный список (ID пользователей через запятую):</label>
-            <textarea name="blacklist_ids" rows="2">{s.get('blacklist_ids', '')}</textarea>
-            
-            <button type="submit" name="action" value="save_general" class="btn">Сохранить основные настройки</button>
-            <hr>
-            <h3>🏆 Авто-роли за баллы</h3>
-            <label>Выберите роль:</label><select name="new_role_id">{roles_opt}</select>
-            <label>Нужно баллов:</label><input type="number" name="new_points" placeholder="1000">
-            <button type="submit" name="action" value="add_reward" class="btn" style="background:#3ba55c;">Добавить роль</button>
-        </form>
-        <div style="margin-top:20px;">{rewards_html}</div>
-    </div>
-    <a href="/servers" style="color:#aaa;">← Назад к списку</a>
-    </div></body>"""
-    return web.Response(text=html, content_type='text/html')
-
-async def handle_save(request):
-    guild_id = int(request.match_info['guild_id'])
-    data = await request.post()
-    if data.get('action') == 'save_general':
-        await db.save_settings(guild_id, 
-            lock_role_id=int(data['lock_role_id']),
-            verify_role_id=int(data['verify_role_id']),
-            blacklist_ids=data['blacklist_ids'])
-    elif data.get('action') == 'add_reward':
-        async with db.pool.acquire() as conn:
-            await conn.execute('INSERT INTO role_rewards (guild_id, role_id, required_points) VALUES ($1, $2, $3)',
-                             guild_id, int(data['new_role_id']), int(data['new_points']))
-    return web.HTTPFound(f'/manage/{guild_id}')
-
-async def handle_del_reward(request):
-    guild_id = int(request.match_info['guild_id'])
-    rid = int(request.match_info['id'])
-    async with db.pool.acquire() as conn:
-        await conn.execute('DELETE FROM role_rewards WHERE id = $1 AND guild_id = $2', rid, guild_id)
-    return web.HTTPFound(f'/manage/{guild_id}')
-
-# --- КОМАНДЫ БОТА ---
-
 @bot.event
-async def on_message(message):
-    if message.author.bot or not message.guild: return
-    # Проверка черного списка
-    s = await db.get_settings(message.guild.id)
-    if s and s['blacklist_ids'] and str(message.author.id) in s['blacklist_ids'].split(','):
-        return
-    await bot.process_commands(message)
-
-@bot.command()
-async def help(ctx):
-    embed = discord.Embed(title="📚 Команды бота", color=0x5865F2)
-    embed.description = f"Настройка ролей и ЧС: [Панель управления]({REDIRECT_URI.replace('/oauth2/callback', '')})"
-    embed.add_field(name="🔒 Модерация", value="`!lock` — закрыть чат\n`!unlock` — открыть чат", inline=False)
-    embed.add_field(name="💰 Баллы", value="`!addpoints @user <кол-во>`\n`!removepoints @user <кол-во>`", inline=False)
-    embed.add_field(name="✅ Верификация", value="`!verify @user` — выдать роль верификации", inline=False)
-    embed.set_footer(text="Роли за поинты выдаются автоматически.")
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def addpoints(ctx, member: discord.Member, amount: int):
-    if not ctx.author.guild_permissions.administrator: return
-    new_pts = await db.add_points(member.id, ctx.guild.id, amount)
-    await ctx.send(f"✅ {member.mention} +**{amount}** баллов. (Всего: **{new_pts}**)")
-    await check_auto_roles(member, new_pts)
-
-@bot.command()
-async def removepoints(ctx, member: discord.Member, amount: int):
-    if not ctx.author.guild_permissions.administrator: return
-    new_pts = await db.add_points(member.id, ctx.guild.id, -amount)
-    await ctx.send(f"❌ {member.mention} -**{amount}** баллов.")
-
-@bot.command()
-async def lock(ctx):
-    s = await db.get_settings(ctx.guild.id)
-    if not s or not s['lock_role_id']: return await ctx.send("❌ Роль не настроена в панели!")
-    role = ctx.guild.get_role(s['lock_role_id'])
-    await ctx.channel.set_permissions(role, send_messages=False)
-    await ctx.send(f"🔒 Канал заблокирован для {role.name}")
-
-@bot.command()
-async def unlock(ctx):
-    s = await db.get_settings(ctx.guild.id)
-    if not s or not s['lock_role_id']: return await ctx.send("❌ Роль не настроена!")
-    role = ctx.guild.get_role(s['lock_role_id'])
-    await ctx.channel.set_permissions(role, send_messages=None)
-    await ctx.send(f"🔓 Канал разблокирован для {role.name}")
-
-@bot.command()
-async def verify(ctx, member: discord.Member):
-    s = await db.get_settings(ctx.guild.id)
-    if not s or not s['verify_role_id']: return await ctx.send("❌ Роль верификации не настроена!")
-    role = ctx.guild.get_role(s['verify_role_id'])
-    await member.add_roles(role)
-    await ctx.send(f"✅ {member.mention} верифицирован!")
-
-# --- ЗАПУСК ---
-async def start_web():
+async def on_ready():
+    await db.connect()
     app = web.Application()
     app.router.add_get('/', handle_home)
     app.router.add_get('/oauth2/callback', handle_callback)
     app.router.add_get('/servers', handle_servers)
     app.router.add_get('/manage/{guild_id}', handle_manage)
     app.router.add_post('/save/{guild_id}', handle_save)
-    app.router.add_get('/del_reward/{guild_id}/{id}', handle_del_reward)
     runner = web.AppRunner(app)
     await runner.setup()
     await web.TCPSite(runner, '0.0.0.0', PORT).start()
+    logger.info(f"🚀 Бот запущен: {bot.user}")
 
 @bot.event
-async def on_ready():
-    await db.connect()
-    await start_web()
-    logger.info(f"🚀 Бот {bot.user} запущен на порту {PORT}")
+async def on_message(message):
+    if message.author.bot or not message.guild: return
+    s = await db.get_settings(message.guild.id)
+    if s and s['blacklist_ids'] and str(message.author.id) in s['blacklist_ids'].split(','):
+        return
+    await bot.process_commands(message)
 
 bot.run(TOKEN)
