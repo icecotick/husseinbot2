@@ -764,7 +764,7 @@ async def on_ready():
     else:
         logger.error("❌ Не удалось подключиться к базе данных!")
         logger.warning("⚠️ Бот будет работать без функций базы данных!")
-        for guild in bot.guilds:
+        for guild in bot.guilds:   # <-- ИСПРАВЛЕНО: bot.guilds, а не bot.groups
             GUILD_ROLE_SETTINGS[guild.id] = DEFAULT_ROLE_SETTINGS.copy()
             GUILD_ROLE_COLORS[guild.id] = DEFAULT_ROLE_COLORS.copy()
     
