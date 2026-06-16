@@ -569,7 +569,7 @@ async def check_and_assign_roles(member: discord.Member):
 async def send_role_notification(member: discord.Member, role_name: str, points: int):
     try:
         embed = discord.Embed(
-            title="🎉 Новая роль получена!",
+            title="<:Cup:1516273274282053672> Новая роль получена!",
             description=f"**{member.display_name}** получил(а) новую роль!",
             color=discord.Color.green()
         )
@@ -578,14 +578,14 @@ async def send_role_notification(member: discord.Member, role_name: str, points:
         embed.add_field(name="Поинты", value=f"`{points}`", inline=True)
         
         congratulations = {
-            'raider newgen': "Добро пожаловать в ряды рейдеров! 🚀",
-            'raider scout': "Отличная работа! Ты становишься опытным скаутом! 🔍",
-            'raider striker': "Впечатляюще! Ты теперь ударная сила нашего отряда! 💥",
-            'raider legend': "Легендарно! Твои достижения войдут в историю! 📜",
-            'raider commander': "Величайший из великих! Ты ведешь за собой весь отряд! 👑"
+            'Raider Newgen': " <:Briliant:1516274269712027658> Добро пожаловать в ряды рейдеров! <:Briliant:1516274269712027658>",
+            'Raider Scout': " <:Briliant:1516274269712027658> Отличная работа! Ты становишься опытным рейдером! <:Briliant:1516274269712027658>",
+            'Raider Striker': " <:Briliant:1516274269712027658> Впечатляюще! Ты теперь один из основных рейдеров! <:Briliant:1516274269712027658>",
+            'Raider Legend': " <:Briliant:1516274269712027658> Легендарно! Твои участия в рейдах лагендарны! <:Briliant:1516274269712027658>",
+            'Raider Commander': " <:Briliant:1516274269712027658> Величайший из великих! Ты ведешь за собой людей на рейде! <:Briliant:1516274269712027658>"
         }
         
-        congrats = congratulations.get(role_name, "Поздравляем с получением новой роли! ✨")
+        congrats = congratulations.get(role_name, "Поздравляем с получением новой роли! <:Briliant:1516274269712027658>")
         embed.add_field(name="Поздравления!", value=congrats, inline=False)
         
         if member.guild.system_channel:
@@ -657,7 +657,7 @@ async def lock_all_channels_in_list(guild: discord.Guild, role: discord.Role, lo
                     success = await apply_channel_lock(channel, role, lock_type)
                     
                     if success:
-                        results.append(f"✅ {channel.mention}")
+                        results.append(f"<:Locked:1516273378816692316> {channel.mention}")
                     else:
                         results.append(f"⚠️ {channel.mention} - ошибка прав")
                 else:
@@ -689,7 +689,7 @@ async def unlock_all_channels_in_list(guild: discord.Guild, role: discord.Role =
                     success = await remove_channel_lock(channel, role)
                     
                     if success:
-                        results.append(f"✅ {channel.mention} - разблокирован для {role.mention}")
+                        results.append(f"<:Unlock:1516273072855056435> {channel.mention} - разблокирован для {role.mention}")
                     else:
                         results.append(f"⚠️ {channel.mention} - ошибка прав")
                 else:
@@ -700,7 +700,7 @@ async def unlock_all_channels_in_list(guild: discord.Guild, role: discord.Role =
                             await remove_channel_lock(channel, role_obj)
                     
                     await db.remove_channel_lock(guild.id, channel.id)
-                    results.append(f"✅ {channel.mention} - все блокировки сняты")
+                    results.append(f"<:Unlock:1516273072855056435> {channel.mention} - все блокировки сняты")
             except Exception as e:
                 results.append(f"❌ {channel_data['channel_name']} - ошибка: {str(e)[:50]}")
         
@@ -838,7 +838,7 @@ async def remove_channel(ctx, channel: Optional[discord.TextChannel] = None):
         
         if success:
             embed = discord.Embed(
-                title="✅ Канал удален",
+                title="<:Setings:1516273199908651028> Канал удален",
                 description=f"Канал {channel.mention} удален из списка",
                 color=COLORS['success']
             )
@@ -867,7 +867,7 @@ async def remove_channel(ctx, channel: Optional[discord.TextChannel] = None):
             
             if success:
                 confirm_embed = discord.Embed(
-                    title="✅ Все каналы удалены",
+                    title="<:Verif:1516272994509389955> Все каналы удалены",
                     description="Все каналы удалены из списка",
                     color=COLORS['success']
                 )
@@ -910,7 +910,7 @@ async def list_channels(ctx):
     
     if not channels:
         embed = discord.Embed(
-            title="📋 Список каналов пуст",
+            title="<:Log:1516274223885324399> Список каналов пуст",
             description="Добавьте каналы с помощью `!addchannel #канал`",
             color=COLORS['info']
         )
@@ -953,7 +953,7 @@ async def lock_info(ctx):
     
     if not locks:
         embed = discord.Embed(
-            title="ℹ️ Нет активных блокировок",
+            title="<:Info:1516285438392795186> Нет активных блокировок",
             description="На сервере нет активных блокировок каналов",
             color=COLORS['info']
         )
@@ -961,7 +961,7 @@ async def lock_info(ctx):
         return
     
     embed = discord.Embed(
-        title="🔒 Активные блокировки",
+        title="<:Locked:1516273378816692316> Активные блокировки",
         description=f"Всего активных блокировок: **{len(locks)}**",
         color=COLORS['info']
     )
@@ -1028,7 +1028,7 @@ async def lockrole_command(ctx, role: discord.Role):
     last_locked_role[ctx.guild.id] = role.id
     
     embed = discord.Embed(
-        title="✅ Роль установлена",
+        title="<:Verif:1516272994509389955> Роль установлена",
         description=f"Теперь команды `!lock` и `!unlock` будут работать с ролью {role.mention}",
         color=COLORS['success']
     )
@@ -1073,7 +1073,7 @@ async def unlock_command(ctx):
         return
     
     embed = discord.Embed(
-        title="🔓 Разблокировка каналов",
+        title="<:Unlock:1516273072855056435> Разблокировка каналов",
         description=f"Начинаю разблокировку каналов для роли {target_role.mention}...",
         color=COLORS['info']
     )
@@ -1092,7 +1092,7 @@ async def unlock_command(ctx):
     error_count = sum(1 for r in results if "❌" in r)
     
     final_embed = discord.Embed(
-        title="✅ Разблокировка завершена",
+        title="<:Unlock:1516273072855056435> Разблокировка завершена",
         color=COLORS['success'] if error_count == 0 else COLORS['warning']
     )
     
@@ -1112,15 +1112,10 @@ async def unlock_command(ctx):
             value="\n".join(results[:10]),
             inline=False
         )
-    
+
+
     final_embed.add_field(
-        name="🎯 Для роли",
-        value=f"{target_role.mention} (ID: `{target_role.id}`)",
-        inline=True
-    )
-    
-    final_embed.add_field(
-        name="👤 Разблокировал",
+        name="<:Profile:1516273314807677028> Разблокировал",
         value=ctx.author.mention,
         inline=True
     )
@@ -1167,7 +1162,7 @@ async def lock_command(ctx, lock_type: str = "send"):
         return
     
     embed = discord.Embed(
-        title="🔒 Блокировка каналов",
+        title="<:Locked:1516273378816692316> Блокировка каналов",
         description=f"Начинаю блокировку каналов для роли {target_role.mention}...",
         color=COLORS['warning']
     )
@@ -1198,7 +1193,7 @@ async def lock_command(ctx, lock_type: str = "send"):
     )
     
     final_embed.add_field(
-        name="📊 Результаты",
+        name="<:Log:1516274223885324399> Результаты",
         value=f"✅ Успешно: {success_count} каналов\n"
               f"⚠️ С предупреждениями: {warning_count} каналов\n"
               f"❌ Ошибки: {error_count} каналов",
@@ -1207,22 +1202,17 @@ async def lock_command(ctx, lock_type: str = "send"):
     
     if len(results) <= 10:
         final_embed.add_field(
-            name="📝 Детали",
+            name="<:Log:1516274223885324399> Детали",
             value="\n".join(results[:10]),
             inline=False
         )
     else:
         final_embed.add_field(
-            name="ℹ️ Информация",
+            name="<:Info:1516285438392795186> Информация",
             value=f"Обработано {len(results)} каналов",
             inline=False
         )
-    
-    final_embed.add_field(
-        name="🎯 Для роли",
-        value=f"{target_role.mention} (ID: `{target_role.id}`)",
-        inline=True
-    )
+
     
     final_embed.add_field(
         name="👤 Заблокировал",
@@ -1241,7 +1231,7 @@ async def current_role_command(ctx):
     
     if ctx.guild.id not in last_locked_role:
         embed = discord.Embed(
-            title="ℹ️ Роль не установлена",
+            title="<:Setings:1516273199908651028> Роль не установлена",
             description=f"Сейчас не выбрана ни одна роль.\n"
                        f"Используйте `{PREFIX}lockrole @роль` чтобы установить роль для команд `!lock` и `!unlock`.",
             color=COLORS['info']
@@ -1254,7 +1244,7 @@ async def current_role_command(ctx):
     
     if not target_role:
         embed = discord.Embed(
-            title="⚠️ Роль не найдена",
+            title="<:Info:1516285438392795186> Роль не найдена",
             description=f"Сохранена роль с ID `{role_id}`, но она больше не существует на сервере.\n"
                        f"Используйте `{PREFIX}lockrole @роль` чтобы установить новую роль.",
             color=COLORS['warning']
@@ -1263,7 +1253,7 @@ async def current_role_command(ctx):
         return
     
     embed = discord.Embed(
-        title="🎯 Текущая роль",
+        title="<:Profile:1516273314807677028> Текущая роль",
         description=f"Команды `!lock` и `!unlock` сейчас работают с ролью {target_role.mention}",
         color=COLORS['success']
     )
@@ -1287,7 +1277,7 @@ async def reset_role_command(ctx):
     
     if ctx.guild.id not in last_locked_role:
         embed = discord.Embed(
-            title="ℹ️ Роль не установлена",
+            title="<:Info:1516285438392795186> Роль не установлена",
             description="Нет установленной роли для сброса.",
             color=COLORS['info']
         )
@@ -1329,8 +1319,7 @@ async def add_points(ctx, member: discord.Member, amount: int, *, reason: str = 
     embed.add_field(name="Новый баланс", value=f"{new_total} поинтов", inline=True)
     embed.add_field(name="Причина", value=reason, inline=False)
     embed.add_field(name="Выдал", value=ctx.author.mention, inline=True)
-    embed.set_footer(text=f"ID: {member.id}")
-    
+
     await safe_send(ctx, embed=embed)
     
     await check_and_assign_roles(member)
@@ -1456,7 +1445,7 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
     position = await db.get_user_position(user_id, guild_id)
     
     embed = discord.Embed(
-        title=f"🏆 Поинты {member.display_name}",
+        title=f"<:Cup:1516273274282053672> Поинты {member.display_name}",
         color=COLORS['points']
     )
     
@@ -1472,7 +1461,7 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
             roles_text.append(f"{status} **{role_name}** - {required_points} поинтов")
         
         embed.add_field(
-            name="🏅 Система ролей",
+            name="<:Profile:1516273314807677028> Система ролей",
             value="\n".join(roles_text),
             inline=False
         )
@@ -1499,8 +1488,8 @@ async def check_points(ctx, member: Optional[discord.Member] = None):
             )
     else:
         embed.add_field(
-            name="🏅 Система ролей",
-            value="⚙️ Система ролей еще не настроена администратором",
+            name="<:Profile:1516273314807677028> Система ролей",
+            value="<:Setings:1516273199908651028> Система ролей еще не настроена администратором",
             inline=False
         )
     
@@ -1517,7 +1506,7 @@ async def leaderboard(ctx, page: int = 1):
     
     if not leaderboard_data:
         embed = discord.Embed(
-            title="📊 Таблица лидеров",
+            title="<:Profile:1516273314807677028> Таблица лидеров",
             description="Пока никто не имеет поинтов!",
             color=COLORS['info']
         )
@@ -1527,7 +1516,7 @@ async def leaderboard(ctx, page: int = 1):
     stats = await db.get_guild_stats(guild_id)
     
     embed = discord.Embed(
-        title="🏆 Таблица лидеров",
+        title="<:Profile:1516273314807677028> Таблица лидеров",
         color=COLORS['points']
     )
     
@@ -1552,12 +1541,12 @@ async def leaderboard(ctx, page: int = 1):
         
         embed.add_field(
             name=f"{medal} {username}",
-            value=f"**{record['points']}** поинтов | 🏅 {user_role}",
+            value=f"**{record['points']}** поинтов | <:Briliant:1516274269712027658> {user_role}",
             inline=False
         )
     
     embed.add_field(
-        name="📊 Статистика сервера",
+        name="<:Log:1516274223885324399> Статистика сервера",
         value=f"• Всего пользователей: **{stats['total_users']}**\n"
               f"• Всего поинтов: **{stats['total_points']}**\n"
               f"• Среднее: **{stats['avg_points']:.1f}**\n"
@@ -1575,7 +1564,7 @@ async def show_roles(ctx):
     role_settings, role_colors = get_guild_settings(guild_id)
     
     embed = discord.Embed(
-        title="🏅 Система ролей",
+        title="<:Profile:1516273314807677028> Система ролей",
         description="Роли выдаются автоматически при достижении определенного количества поинтов",
         color=COLORS['points']
     )
@@ -1592,7 +1581,7 @@ async def show_roles(ctx):
             )
     else:
         embed.add_field(
-            name="ℹ️ Информация",
+            name="<:Info:1516285438392795186> Информация",
             value="Система ролей еще не настроена",
             inline=False
         )
@@ -1621,79 +1610,6 @@ async def ping_command(ctx):
     
     await safe_send(ctx, embed=embed)
 
-@bot.command(name='export')
-@is_admin()
-async def export_command(ctx):
-    guild_id = ctx.guild.id
-    
-    users = await db.get_leaderboard(guild_id, 1000)
-    
-    csv_data = "ID пользователя,Ник,Поинты,Позиция\n"
-    
-    for i, user in enumerate(users, 1):
-        try:
-            member = await ctx.guild.fetch_member(user['user_id'])
-            username = member.display_name
-        except:
-            username = f"User_{user['user_id']}"
-        
-        csv_data += f"{user['user_id']},{username},{user['points']},{i}\n"
-    
-    filename = f"export_{guild_id}_{int(datetime.now().timestamp())}.csv"
-    with open(filename, 'w', encoding='utf-8') as f:
-        f.write(csv_data)
-    
-    file = discord.File(filename)
-    await safe_send(ctx, "📁 Экспорт данных о поинтах:", file=file)
-    os.remove(filename)
-
-@bot.command(name='raid')
-@is_admin()
-async def raid_command(ctx, clan: str, link: str):
-    if not ctx.channel.permissions_for(ctx.guild.me).mention_everyone:
-        embed = discord.Embed(
-            title="❌ Недостаточно прав",
-            description="Мне нужны права на упоминание @everyone для этой команды!",
-            color=COLORS['error']
-        )
-        await safe_send(ctx, embed=embed)
-        return
-    
-    if not link.startswith(('http://', 'https://', 'discord.gg/')):
-        await safe_send(ctx, "❌ Ссылка должна начинаться с http://, https:// или discord.gg/")
-        return
-    
-    embed = discord.Embed(
-        title="РЕЙД!",
-        description="Всем участникам срочно присоединиться!",
-        color=discord.Color.red()
-    )
-    
-    embed.add_field(
-        name="👥 Клан",
-        value=f"**{clan}**",
-        inline=True
-    )
-    
-    embed.add_field(
-        name="🔗 Ссылка",
-        value=f"[Нажмите чтобы присоединиться]({link})",
-        inline=True
-    )
-    
-    embed.set_footer(
-        text=f"Оповещение отправлено {ctx.author.display_name}",
-        icon_url=ctx.author.display_avatar.url
-    )
-    
-    await safe_send(ctx, content="@everyone", embed=embed)
-    
-    confirm_embed = discord.Embed(
-        title="✅ Рейд-оповещение отправлено!",
-        description=f"Клан: **{clan}**\nСсылка: {link}",
-        color=COLORS['success']
-    )
-    await safe_send(ctx, embed=confirm_embed)
 
 # ========== КОМАНДЫ ДЛЯ УПРАВЛЕНИЯ РОЛЯМИ ЗА ПОИНТЫ ==========
 
@@ -1756,7 +1672,7 @@ async def add_role_for_points(ctx, points: int, *, role_name: str):
         color=COLORS['success']
     )
     
-    embed.add_field(name="🎭 Название роли", value=f"**{role_name}**", inline=True)
+    embed.add_field(name="<:Profile:1516273314807677028> Название роли", value=f"**{role_name}**", inline=True)
     embed.add_field(name="💰 Требуемые поинты", value=f"**{points}**", inline=True)
     embed.add_field(name="🎨 Цвет", value=f"`{role_colors[role_name]}`", inline=True)
     
@@ -2463,7 +2379,7 @@ async def list_admin_roles(ctx):
             roles_info.append(f"• Роль с ID `{role_id}` (не найдена на сервере)")
     
     embed.add_field(
-        name="🎭 Роли",
+        name="<:Setings:1516273199908651028> Роли",
         value="\n".join(roles_info) if roles_info else "Нет доступных ролей",
         inline=False
     )
@@ -2658,7 +2574,7 @@ async def remove_mod_role(ctx, role: discord.Role):
     )
     
     embed.add_field(
-        name="📊 Текущие модераторские роли",
+        name="<:Log:1516274223885324399> Текущие модераторские роли",
         value="\n".join([f"• <@&{role_id}>" for role_id in MOD_ROLE_IDS]) or "Нет ролей",
         inline=False
     )
@@ -2694,7 +2610,7 @@ async def list_mod_roles(ctx):
             roles_info.append(f"• Роль с ID `{role_id}` (не найдена на сервере)")
     
     embed.add_field(
-        name="🎭 Роли",
+        name="<:Profile:1516273314807677028> Роли",
         value="\n".join(roles_info) if roles_info else "Нет доступных ролей",
         inline=False
     )
@@ -2716,7 +2632,7 @@ async def clear_mod_roles(ctx):
     
     if not MOD_ROLE_IDS:
         embed = discord.Embed(
-            title="ℹ️ Нет ролей",
+            title="<:Setings:1516273199908651028> Нет ролей",
             description="Список модераторских ролей уже пуст!",
             color=COLORS['info']
         )
@@ -2952,7 +2868,7 @@ class VouchShowVotesButton(discord.ui.Button):
         view: VouchView = self.view
         
         embed = discord.Embed(
-            title="📋 Список проголосовавших",
+            title="<:Log:1516274223885324399> Список проголосовавших",
             color=discord.Color.blue()
         )
         
@@ -3030,14 +2946,14 @@ class VouchGiveRoleButton(discord.ui.Button):
             )
             
             embed.add_field(
-                name="📊 Итоги голосования",
+                name="<:Log:1516274223885324399> Итоги голосования",
                 value=f"✅ ЗА: {len(view.votes_for)}\n"
                       f"❌ ПРОТИВ: {len(view.votes_against)}",
                 inline=False
             )
             
             embed.add_field(
-                name="👤 Выдал",
+                name="<:Profile:1516273314807677028> Выдал",
                 value=interaction.user.mention,
                 inline=True
             )
@@ -3053,7 +2969,7 @@ class VouchGiveRoleButton(discord.ui.Button):
             
             try:
                 dm_embed = discord.Embed(
-                    title="🎉 Вас повысили!",
+                    title="<:Briliant:1516274269712027658> Вас повысили!",
                     description=f"На сервере **{interaction.guild.name}** вы получили роль **{view.target_role.name}** по результатам голосования!",
                     color=discord.Color.gold()
                 )
@@ -3115,7 +3031,7 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
         return
     
     embed = discord.Embed(
-        title=f"🗳️ Голосование за повышение {member.display_name}",
+        title=f"<:Log:1516274223885324399> Голосование за повышение {member.display_name}",
         description=f"**Предложил:** {ctx.author.mention}\n"
                    f"**Пользователь:** {member.mention}\n"
                    f"**Роль:** {role.mention}\n\n"
@@ -3139,7 +3055,7 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
     )
     
     embed.add_field(
-        name="📊 Всего",
+        name="<:Log:1516274223885324399> Всего",
         value="**0**",
         inline=True
     )
@@ -3203,7 +3119,7 @@ async def end_vouch_command(ctx):
         )
         
         embed_result.add_field(
-            name="📊 Итоги",
+            name="<:Log:1516274223885324399> Итоги",
             value=f"✅ ЗА: {len(view.votes_for)}\n"
                   f"❌ ПРОТИВ: {len(view.votes_against)}",
             inline=False
