@@ -66,25 +66,25 @@ GUILD_ROLE_COLORS = {}
 
 # Стандартные настройки для новых серверов
 DEFAULT_ROLE_SETTINGS = {
-    200: 'raider newgen',
-    400: 'raider scout', 
-    800: 'raider striker', 
-    1200: 'raider heavy', 
-    1600: 'raider legend',
-    2400: 'raider who lives on raids', 
-    3200: 'raid moderator', 
-    4000: 'raider commander'
+    200: 'Raider Newgen',
+    400: 'Raider Scout', 
+    800: 'Raider Striker', 
+    1200: 'Raider Leutenant', 
+    1600: 'Raider Legend',
+    2400: 'Prime Raider', 
+    3200: 'Raid Monster', 
+    4000: 'Raider Commander'
 }
 
 DEFAULT_ROLE_COLORS = {
-    'raider newgen': discord.Color.green(),
-    'raider scout': discord.Color.blue(),
-    'raider striker': discord.Color.orange(),
-    'raider heavy': discord.Color.yellow(),
-    'raider legend': discord.Color.purple(),
-    'raider who lives on raids': discord.Color.blue(),
-    'raid moderator': discord.Color.red(),
-    'raider commander': discord.Color.gold()
+    'Raider Newgen': discord.Color.green(),
+    'Raider Scout': discord.Color.blue(),
+    'Raider Striker': discord.Color.orange(),
+    'Raider Leutenant': discord.Color.yellow(),
+    'Raider Legend': discord.Color.purple(),
+    'Prime Raider': discord.Color.blue(),
+    'Raid Monster': discord.Color.red(),
+    'Raider Commander': discord.Color.gold()
 }
 
 # ========== БАЗА ДАННЫХ ==========
@@ -2485,7 +2485,7 @@ async def clear_admin_roles(ctx):
     
     if not ADMIN_ROLE_IDS:
         embed = discord.Embed(
-            title="ℹ️ Нет ролей",
+            title="<:Setings:1516273199908651028> Нет ролей",
             description="Список админских ролей уже пуст!",
             color=COLORS['info']
         )
@@ -2528,7 +2528,7 @@ async def clear_admin_roles(ctx):
             logger.warning(f"Не удалось обновить .env файл: {e}")
         
         confirm_embed = discord.Embed(
-            title="✅ Все админские роли удалены",
+            title="<:Verif:1516272994509389955> Все админские роли удалены",
             description=f"Удалено {old_count} админских ролей.\n"
                        "Только пользователи с правами администратора Discord могут использовать админские команды.",
             color=COLORS['success']
@@ -2601,13 +2601,13 @@ async def add_mod_role(ctx, role: discord.Role):
         logger.warning(f"Не удалось обновить .env файл: {e}")
     
     embed = discord.Embed(
-        title="✅ Модераторская роль добавлена",
+        title="<:Verif:1516272994509389955> Модераторская роль добавлена",
         description=f"Роль {role.mention} добавлена в список модераторских ролей!",
         color=COLORS['success']
     )
     
     embed.add_field(
-        name="📊 Текущие модераторские роли",
+        name="<:Log:1516274223885324399> Текущие модераторские роли",
         value="\n".join([f"• <@&{role_id}>" for role_id in MOD_ROLE_IDS]) or "Нет ролей",
         inline=False
     )
@@ -2652,7 +2652,7 @@ async def remove_mod_role(ctx, role: discord.Role):
         logger.warning(f"Не удалось обновить .env файл: {e}")
     
     embed = discord.Embed(
-        title="✅ Модераторская роль удалена",
+        title="<:Verif:1516272994509389955> Модераторская роль удалена",
         description=f"Роль {role.mention} удалена из списка модераторских ролей!",
         color=COLORS['success']
     )
@@ -2671,7 +2671,7 @@ async def remove_mod_role(ctx, role: discord.Role):
 async def list_mod_roles(ctx):
     if not MOD_ROLE_IDS:
         embed = discord.Embed(
-            title="📋 Список модераторских ролей",
+            title="<:Log:1516274223885324399> Список модераторских ролей",
             description="В данный момент нет назначенных модераторских ролей.\n"
                        f"Используйте `{PREFIX}addmodrole @роль` чтобы добавить роль.",
             color=COLORS['info']
@@ -2680,7 +2680,7 @@ async def list_mod_roles(ctx):
         return
     
     embed = discord.Embed(
-        title="📋 Список модераторских ролей",
+        title="<:Log:1516274223885324399> Список модераторских ролей",
         description=f"Всего ролей: **{len(MOD_ROLE_IDS)}**",
         color=COLORS['info']
     )
@@ -2700,7 +2700,7 @@ async def list_mod_roles(ctx):
     )
     
     embed.add_field(
-        name="ℹ️ Информация",
+        name="<:Profile:1516273314807677028> Информация",
         value="Владельцы этих ролей имеют доступ к командам блокировки каналов (lock, unlock, lockrole, lockinfo).\n"
               f"Используйте `{PREFIX}addmodrole @роль` чтобы добавить новую роль.\n"
               f"Используйте `{PREFIX}removemodrole @роль` чтобы удалить роль.",
@@ -3120,10 +3120,7 @@ async def vouch_command(ctx, member: discord.Member, role: discord.Role):
                    f"**Пользователь:** {member.mention}\n"
                    f"**Роль:** {role.mention}\n\n"
                    f"**Правила голосования:**\n"
-                   f"• Голосовать могут все участники сервера\n"
-                   f"• **Нельзя голосовать за самого себя**\n"
                    f"• Для выдачи роли нужно **минимум 5 голосов ЗА**\n"
-                   f"• После набора 5+ голосов появится кнопка для администратора\n"
                    f"• Только администратор может выдать роль\n"
                    f"• Голосование длится **2 часа**",
         color=discord.Color.blue()
@@ -3200,7 +3197,7 @@ async def end_vouch_command(ctx):
             item.disabled = True
         
         embed_result = discord.Embed(
-            title="🗳️ Голосование завершено",
+            title="<:Log:1516274223885324399> Голосование завершено",
             description=f"Голосование за {view.target_user.mention} было принудительно завершено.",
             color=COLORS['warning']
         )
@@ -3260,9 +3257,9 @@ async def vouch_info_command(ctx):
         color=COLORS['info']
     )
     
-    embed.add_field(name="👤 Пользователь", value=view.target_user.mention, inline=True)
-    embed.add_field(name="🎭 Роль", value=view.target_role.mention, inline=True)
-    embed.add_field(name="👑 Инициатор", value=view.initiator.mention, inline=True)
+    embed.add_field(name="<:Profile:1516273314807677028> Пользователь", value=view.target_user.mention, inline=True)
+    embed.add_field(name="<:Cup:1516273274282053672> Роль", value=view.target_role.mention, inline=True)
+    embed.add_field(name="<:Admin:1516273106153640087> Инициатор", value=view.initiator.mention, inline=True)
     
     embed.add_field(name="✅ ЗА", value=str(len(view.votes_for)), inline=True)
     embed.add_field(name="❌ ПРОТИВ", value=str(len(view.votes_against)), inline=True)
@@ -3377,7 +3374,7 @@ async def set_verify_roles(ctx, verify_role: discord.Role, unverify_role: discor
     )
     
     embed.add_field(
-        name="📋 Пример использования",
+        name="<:Log:1516274223885324399> Пример использования",
         value=f"`{PREFIX}verify @пользователь`",
         inline=False
     )
@@ -3391,7 +3388,7 @@ async def unset_verify_roles(ctx):
     
     if ctx.guild.id not in verify_settings:
         embed = discord.Embed(
-            title="ℹ️ Роли не настроены",
+            title="<:Setings:1516273199908651028> Роли не настроены",
             description="На этом сервере не настроены роли верификации.",
             color=COLORS['info']
         )
@@ -3401,7 +3398,7 @@ async def unset_verify_roles(ctx):
     del verify_settings[ctx.guild.id]
     
     embed = discord.Embed(
-        title="✅ Настройки сброшены",
+        title="<:Verif:1516272994509389955> Настройки сброшены",
         description="Роли верификации удалены. Теперь команда `!verify` не будет работать до новой настройки.",
         color=COLORS['success']
     )
@@ -3485,7 +3482,7 @@ async def verify_user(ctx, member: discord.Member):
     if verify_role not in member.roles:
         try:
             await member.add_roles(verify_role, reason=f"Верификация пользователя (админ: {ctx.author})")
-            results.append(f"✅ Выдана роль {verify_role.mention}")
+            results.append(f"<:Verif:1516272994509389955> Выдана роль {verify_role.mention}")
         except discord.Forbidden:
             errors.append(f"❌ Нет прав для выдачи роли {verify_role.mention}")
         except Exception as e:
@@ -3494,14 +3491,14 @@ async def verify_user(ctx, member: discord.Member):
         results.append(f"ℹ️ У пользователя уже есть роль {verify_role.mention}")
     
     embed = discord.Embed(
-        title="🔐 Верификация пользователя",
+        title="<:Verif:1516272994509389955> Верификация пользователя",
         description=f"**Пользователь:** {member.mention}\n**Админ:** {ctx.author.mention}",
         color=COLORS['success'] if not errors else COLORS['warning']
     )
     
     if results:
         embed.add_field(
-            name="📋 Результаты",
+            name="<:Log:1516274223885324399> Результаты",
             value="\n".join(results),
             inline=False
         )
@@ -3522,7 +3519,7 @@ async def verify_info(ctx):
     
     if ctx.guild.id not in verify_settings:
         embed = discord.Embed(
-            title="ℹ️ Настройки верификации",
+            title="<:Setings:1516273199908651028> Настройки верификации",
             description=f"На этом сервере не настроены роли верификации.\n"
                        f"Используйте `{PREFIX}verifyrole @роль1 @роль2` чтобы настроить.",
             color=COLORS['info']
@@ -3535,12 +3532,12 @@ async def verify_info(ctx):
     unverify_role = ctx.guild.get_role(settings["unverify_role_id"])
     
     embed = discord.Embed(
-        title="🔐 Настройки верификации",
+        title="<:Setings:1516273199908651028> Настройки верификации",
         color=COLORS['info']
     )
     
     embed.add_field(
-        name="✅ Verify роль",
+        name="<:Verif:1516272994509389955> Verify роль",
         value=verify_role.mention if verify_role else f"Роль не найдена (ID: {settings['verify_role_id']})",
         inline=True
     )
@@ -3552,7 +3549,7 @@ async def verify_info(ctx):
     )
     
     embed.add_field(
-        name="📋 Команды",
+        name="<:Admin:1516273106153640087> Команды",
         value=f"`{PREFIX}verify @user` - верифицировать\n"
               f"`{PREFIX}clearverifyroles` - сбросить настройки",
         inline=False
@@ -3618,7 +3615,7 @@ async def help_command(ctx):
         f"`{PREFIX}roles` - Система ролей\n"
         f"`{PREFIX}ping` - Статус бота"
     )
-    embed.add_field(name="👤 Для всех", value=user_commands, inline=False)
+    embed.add_field(name="<:Profile:1516273314807677028> Для всех", value=user_commands, inline=False)
     
     if is_user_admin:
         # Поинты (админ)
@@ -3629,7 +3626,7 @@ async def help_command(ctx):
             f"`{PREFIX}addpoints_multi кол-во @user1 @user2...` - Массовая выдача\n"
             f"`{PREFIX}resetpoints` - Сброс ВСЕХ поинтов"
         )
-        embed.add_field(name="💰 Поинты (админ)", value=points_commands, inline=False)
+        embed.add_field(name="<:Briliant:1516274269712027658> Поинты (админ)", value=points_commands, inline=False)
         
         # Роли за поинты (админ)
         role_commands = (
@@ -3643,7 +3640,7 @@ async def help_command(ctx):
             f"`{PREFIX}saveroles` - Сохранить конфиг\n"
             f"`{PREFIX}reloadroles` - Загрузить из БД"
         )
-        embed.add_field(name="🎭 Роли за поинты (админ)", value=role_commands, inline=False)
+        embed.add_field(name="<:Briliant:1516274269712027658> Роли за поинты (админ)", value=role_commands, inline=False)
         
         # Админские роли
         admin_role_commands = (
@@ -3652,7 +3649,7 @@ async def help_command(ctx):
             f"`{PREFIX}listadminroles` - Список админ-ролей\n"
             f"`{PREFIX}clearadminroles` - Очистить админ-роли"
         )
-        embed.add_field(name="👑 Админские роли", value=admin_role_commands, inline=False)
+        embed.add_field(name="<:Admin:1516273106153640087> Админские роли", value=admin_role_commands, inline=False)
         
         # Модераторские роли (управление)
         mod_role_commands = (
@@ -3661,7 +3658,7 @@ async def help_command(ctx):
             f"`{PREFIX}listmodroles` - Список мод-ролей\n"
             f"`{PREFIX}clearmodroles` - Очистить мод-роли"
         )
-        embed.add_field(name="🛡️ Модераторские роли", value=mod_role_commands, inline=False)
+        embed.add_field(name="<:Admin:1516273106153640087> Модераторские роли", value=mod_role_commands, inline=False)
         
         # Блокировка каналов (админ/мод)
         lock_commands = (
@@ -3675,7 +3672,7 @@ async def help_command(ctx):
             f"`{PREFIX}resetrole` - Сбросить роль\n"
             f"`{PREFIX}lockinfo` - Информация о текущих блокировках"
         )
-        embed.add_field(name="🔒 Блокировка каналов (админ/мод)", value=lock_commands, inline=False)
+        embed.add_field(name="<:Locked:1516273378816692316> Блокировка каналов (админ/мод)", value=lock_commands, inline=False)
         
         # Голосование
         vouch_commands = (
@@ -3683,7 +3680,7 @@ async def help_command(ctx):
             f"`{PREFIX}endvouch` - Завершить голосование\n"
             f"`{PREFIX}vouchinfo` - Инфо о голосовании"
         )
-        embed.add_field(name="🗳️ Голосование (админ)", value=vouch_commands, inline=False)
+        embed.add_field(name="<:Log:1516274223885324399> Голосование (админ)", value=vouch_commands, inline=False)
         
         # Верификация
         verify_commands = (
@@ -3692,11 +3689,8 @@ async def help_command(ctx):
             f"`{PREFIX}verifyinfo` - Текущие настройки\n"
             f"`{PREFIX}clearverifyroles` - Сбросить настройки"
         )
-        embed.add_field(name="✅ Верификация (админ/мод)", value=verify_commands, inline=False)
-        
-        # Экспорт
-        embed.add_field(name="📊 Экспорт", value=f"`{PREFIX}export` - CSV файл", inline=False)
-    
+        embed.add_field(name="<:Verif:1516272994509389955> Верификация (админ/мод)", value=verify_commands, inline=False)
+
     # Информация о системе
     admin_roles_text = []
     if ADMIN_ROLE_IDS:
@@ -3724,7 +3718,7 @@ async def help_command(ctx):
     roles_count = len(role_settings)
     
     embed.add_field(
-        name="ℹ️ Система",
+        name="<:Profile:1516273314807677028> Система",
         value=f"**Серверов:** {len(bot.guilds)} | **Ролей за поинты:** {roles_count}\n"
               f"**Админ роли:**\n{chr(10).join(admin_roles_text)}\n"
               f"**Модераторские роли:**\n{chr(10).join(mod_roles_text)}",
